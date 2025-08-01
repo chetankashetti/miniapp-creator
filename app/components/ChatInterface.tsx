@@ -32,6 +32,7 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
     // const [error, setError] = useState<string | null>(null);
     const [chat, setChat] = useState<ChatMessage[]>([]);
     const [aiLoading, setAiLoading] = useState(false);
+    const [hasShownWarning, setHasShownWarning] = useState(false);
     const chatBottomRef = useRef<HTMLDivElement>(null);
     const chatContainerRef = useRef<HTMLDivElement>(null);
 
@@ -56,20 +57,21 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
     // Add welcome message when chat is empty
     useEffect(() => {
         if (chat.length === 0 && !aiLoading) {
-            //             setChat([{
-            //                 role: 'ai',
-            //                 content: `Minidev is your on-chain sidekick that transforms ideas into fully functional Farcaster Mini Apps — no coding required. Just describe what you want, and Minidev handles the logic, UI, and deployment straight into the Farcaster ecosystem.
-
-            // From polls to price tickers, NFT galleries to AI widgets — if you can imagine it, Minidev can build it.
-
-            // 🚀 Create. Customize. Cast.
-
-            // `,
-            //                 phase: 'requirements',
-            //                 timestamp: Date.now()
-            //             }]);
+            setChat([{
+                role: 'ai',
+                content: `Minidev is your on-chain sidekick that transforms ideas into fully functional Farcaster Mini Apps — no coding required.`,
+                phase: 'requirements',
+                timestamp: Date.now()
+            }]);
         }
     }, [chat.length, aiLoading]);
+
+    // Show warning message once when user hasn't started chatting
+    useEffect(() => {
+        if (chat.length === 1 && !hasShownWarning && !aiLoading) {
+            setHasShownWarning(true);
+        }
+    }, [chat.length, hasShownWarning, aiLoading]);
 
     // Scroll to bottom when chat messages change
     useEffect(() => {
@@ -372,7 +374,7 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
                                     components={{
                                         p: ({ children }) => <p>{children}</p>,
                                         h1: ({ children }) => <h1 className="text-xl font-bold mb-4">{children}</h1>,
-                                        h2: ({ children }) => <h2 className="text-lg font-semibold mb-3">{children}</h2>,
+                                        h2: ({ children }) => <h2 className="text-base font-semibold mb-3">{children}</h2>,
                                         h3: ({ children }) => <h3 className="text-base font-semibold mb-2">{children}</h3>,
                                         ul: ({ children }) => <ul className="list-disc ml-4 mb-3">{children}</ul>,
                                         li: ({ children }) => <li className="mb-1">{children}</li>,
@@ -391,12 +393,10 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
                         <div className="flex justify-start">
                             <div className="rounded-lg px-4 py-2 max-w-[80%] text-sm bg-transparent text-black">
                                 <div className="flex items-center gap-2">
-                                    <div className="flex space-x-1">
-                                        <div className="w-2 h-2 bg-gray-500 rounded-full animate-bounce"></div>
-                                        <div className="w-2 h-2 bg-gray-500 rounded-full animate-bounce" style={{ animationDelay: '0.1s' }}></div>
-                                        <div className="w-2 h-2 bg-gray-500 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></div>
+                                    <div className="flex items-center gap-2 text-gray-600">
+                                        <div className="animate-spin h-4 w-4 border-2 border-gray-600 border-t-transparent rounded-full"></div>
+                                        <span>Thinking...</span>
                                     </div>
-                                    <span>AI is typing...</span>
                                 </div>
                             </div>
                         </div>
@@ -407,6 +407,23 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
 
             {/* Chat Input */}
             <div className="pb-4 px-[20px]">
+                {/* Beta Warning Message */}
+                {chat.length === 1 && hasShownWarning && (
+                    <div className="mb-3">
+                        <div className="bg-yellow-50 border border-yellow-200 rounded-full px-4 py-2.5 text-sm">
+                            <div className="flex items-center gap-2">
+                                <div className="flex-shrink-0 mt-0.5">
+                                    <svg className="w-3.5 h-3.5 text-yellow-500" fill="currentColor" viewBox="0 0 20 20">
+                                        <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                                    </svg>
+                                </div>
+                                <div className="text-yellow-700">
+                                    <p className="font-normal text-xs">This is a beta version—stick to simple ideas, as complex prompts may break or behave unexpectedly</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                )}
                 <form
                     onSubmit={e => {
                         e.preventDefault();

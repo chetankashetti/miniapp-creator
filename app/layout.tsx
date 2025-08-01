@@ -82,18 +82,17 @@ export default function RootLayout({
         suppressHydrationWarning
       >
         {/* Mobile Warning */}
-        <div className="md:hidden fixed inset-0 bg-gradient-to-br from-blue-50 to-indigo-100 z-50 flex items-center justify-center p-6">
+        <div className="md:hidden fixed inset-0 bg-gradient-to-br from-blue-50 to-indigo-100 z-50 flex items-center justify-center p-6 font-funnel-sans">
           <div className="bg-white rounded-2xl p-8 max-w-sm text-center shadow-xl border border-gray-200">
             <div className="mb-6">
-              <div className="w-16 h-16 mx-auto bg-gradient-to-r from-blue-500 to-indigo-600 rounded-full flex items-center justify-center mb-4">
+              <div className="w-16 h-16 mx-auto bg-pink rounded-full flex items-center justify-center mb-4">
                 <svg className="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
                 </svg>
               </div>
               <h2 className="text-2xl font-bold text-gray-900 mb-3">Desktop Experience</h2>
               <p className="text-gray-600 mb-4 leading-relaxed">
-                MiniDev is optimized for desktop use to provide the best development experience.
-                Please open this page on a computer to create and preview your mini apps.
+                Minidev is optimized for desktop use to provide the best development experience.
               </p>
               <div className="flex items-center justify-center space-x-2 text-sm text-gray-500">
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">

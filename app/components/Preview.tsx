@@ -49,7 +49,7 @@ export function Preview({ currentProject }: PreviewProps) {
                         />
                     </div>
                     <div className="mt-2 text-xs text-black-60">
-                        iPhone Preview (280x568)
+                        Mobile Preview
                     </div>
                 </div>
             </div>
