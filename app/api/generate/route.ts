@@ -2,6 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import fs from "fs-extra";
 import path from "path";
 import { v4 as uuidv4 } from "uuid";
+import { exec } from "child_process";
+import { promisify } from "util";
+
+const execAsync = promisify(exec);
 import {
   createPreview,
   updatePreviewFiles,
@@ -311,15 +315,26 @@ export async function POST(request: NextRequest) {
     // Generate unique project ID
     const projectId = uuidv4();
     const userDir = path.join(process.cwd(), "generated", projectId);
-    const boilerplateDir = path.join(process.cwd(), "..", "farcaster-miniapp");
+    const boilerplateDir = path.join(
+      process.cwd(),
+      "generated",
+      `${projectId}-boilerplate`
+    );
 
     console.log(`📁 Project ID: ${projectId}`);
-    console.log(` User directory: ${userDir}`);
+    console.log(`📁 User directory: ${userDir}`);
     console.log(`📁 Boilerplate directory: ${boilerplateDir}`);
 
-    // Check if boilerplate directory exists
-    if (!(await fs.pathExists(boilerplateDir))) {
-      throw new Error(`Boilerplate directory not found: ${boilerplateDir}`);
+    // Clone boilerplate from GitHub
+    console.log("📋 Cloning boilerplate from GitHub...");
+    try {
+      await execAsync(
+        `git clone https://github.com/earnkitai/minidev-boilerplate.git "${boilerplateDir}"`
+      );
+      console.log("✅ Boilerplate cloned successfully");
+    } catch (error) {
+      console.error("❌ Failed to clone boilerplate:", error);
+      throw new Error(`Failed to clone boilerplate: ${error}`);
     }
 
     // Copy boilerplate to user directory
@@ -340,6 +355,15 @@ export async function POST(request: NextRequest) {
       },
     });
     console.log("✅ Boilerplate copied successfully");
+
+    // Clean up cloned boilerplate directory
+    console.log("🧹 Cleaning up boilerplate directory...");
+    try {
+      await fs.remove(boilerplateDir);
+      console.log("✅ Boilerplate directory cleaned up");
+    } catch (error) {
+      console.warn("⚠️ Failed to clean up boilerplate directory:", error);
+    }
 
     // Read boilerplate files
     console.log("📖 Reading boilerplate files...");

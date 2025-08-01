@@ -56,18 +56,18 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
     // Add welcome message when chat is empty
     useEffect(() => {
         if (chat.length === 0 && !aiLoading) {
-            setChat([{
-                role: 'ai',
-                content: `MiniDev is your on-chain sidekick that transforms ideas into fully functional Farcaster Mini Apps — no coding required. Just describe what you want, and MiniDev handles the logic, UI, and deployment straight into the Farcaster ecosystem.
+            //             setChat([{
+            //                 role: 'ai',
+            //                 content: `Minidev is your on-chain sidekick that transforms ideas into fully functional Farcaster Mini Apps — no coding required. Just describe what you want, and Minidev handles the logic, UI, and deployment straight into the Farcaster ecosystem.
 
-From polls to price tickers, NFT galleries to AI widgets — if you can imagine it, MiniDev can build it.
+            // From polls to price tickers, NFT galleries to AI widgets — if you can imagine it, Minidev can build it.
 
-🚀 Create. Customize. Cast.
+            // 🚀 Create. Customize. Cast.
 
-`,
-                phase: 'requirements',
-                timestamp: Date.now()
-            }]);
+            // `,
+            //                 phase: 'requirements',
+            //                 timestamp: Date.now()
+            //             }]);
         }
     }, [chat.length, aiLoading]);
 
@@ -421,10 +421,10 @@ From polls to price tickers, NFT galleries to AI widgets — if you can imagine 
                         onChange={e => setPrompt(e.target.value)}
                         placeholder={
                             currentPhase === 'requirements'
-                                ? "Ask MiniDev"
+                                ? "Ask Minidev"
                                 : currentPhase === 'building'
-                                    ? "Ask MiniDev"
-                                    : "Ask MiniDev"
+                                    ? "Ask Minidev"
+                                    : "Ask Minidev"
                         }
                         className="flex-1 resize-none p-2 px-4 bg-transparent rounded-lg border-none focus:outline-none focus:border-none font-funnel-sans text-black-80 font-semibold"
                         disabled={aiLoading || isGenerating}
