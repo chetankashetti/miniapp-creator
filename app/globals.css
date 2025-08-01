@@ -3,11 +3,73 @@
 @theme {
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
+  --font-funnel-display: var(--font-funnel-display);
+  --font-funnel-sans: var(--font-funnel-sans);
+
+  /* Custom colors with opacity variants */
+  --color-black-4: rgb(0 0 0 / 0.04);
+  --color-black-5: rgb(0 0 0 / 0.05);
+  --color-black-10: rgb(0 0 0 / 0.1);
+  --color-black-20: rgb(0 0 0 / 0.2);
+  --color-black-30: rgb(0 0 0 / 0.3);
+  --color-black-40: rgb(0 0 0 / 0.4);
+  --color-black-50: rgb(0 0 0 / 0.5);
+  --color-black-60: rgb(0 0 0 / 0.6);
+  --color-black-70: rgb(0 0 0 / 0.7);
+  --color-black-80: rgb(0 0 0 / 0.8);
+  --color-black-90: rgb(0 0 0 / 0.9);
+
+  --color-white-10: rgb(255 255 255 / 0.1);
+  --color-white-20: rgb(255 255 255 / 0.2);
+  --color-white-30: rgb(255 255 255 / 0.3);
+  --color-white-40: rgb(255 255 255 / 0.4);
+  --color-white-50: rgb(255 255 255 / 0.5);
+  --color-white-60: rgb(255 255 255 / 0.6);
+  --color-white-70: rgb(255 255 255 / 0.7);
+  --color-white-80: rgb(255 255 255 / 0.8);
+  --color-white-90: rgb(255 255 255 / 0.9);
+
+  /* Gray variants with opacity */
+  --color-gray-100-50: rgb(243 244 246 / 0.5);
+  --color-gray-200-50: rgb(229 231 235 / 0.5);
+  --color-gray-300-50: rgb(209 213 219 / 0.5);
+  --color-gray-400-50: rgb(156 163 175 / 0.5);
+  --color-gray-500-50: rgb(107 114 128 / 0.5);
+  --color-gray-600-50: rgb(75 85 99 / 0.5);
+  --color-gray-700-50: rgb(55 65 81 / 0.5);
+  --color-gray-800-50: rgb(31 41 55 / 0.5);
+  --color-gray-900-50: rgb(17 24 39 / 0.5);
+
+  /* Blue variants with opacity */
+  --color-blue-500-50: rgb(59 130 246 / 0.5);
+  --color-blue-600-50: rgb(37 99 235 / 0.5);
+  --color-blue-700-50: rgb(29 78 216 / 0.5);
+
+  /* Red variants with opacity */
+  --color-red-500-50: rgb(239 68 68 / 0.5);
+  --color-red-600-50: rgb(220 38 38 / 0.5);
+  --color-red-700-50: rgb(185 28 28 / 0.5);
+
+  /* Custom brand colors */
+  --color-primary: hsla(261, 55%, 61%, 1);
+  --color-primary-50: rgb(138 99 210 / 0.5);
+  --color-primary-80: rgb(138 99 210 / 0.8);
+  --color-pink: hsla(261, 55%, 61%, 1);
+
+  /* Custom spacing */
+  --spacing-40px: 40px;
+  --spacing-100px: 100px;
+
+  /* Custom border radius */
+  --radius-56px: 56px;
+
+  /* Custom font family */
+  --font-funnel-sans: Inter, system-ui, sans-serif;
 }
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #171717;
+  --foreground: #ffffff;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -20,5 +82,22 @@
 body {
   color: var(--foreground);
   background: var(--background);
+  background-color: var(--background);
   font-family: Arial, Helvetica, sans-serif;
+}
+
+.dot-bg {
+  background-color: rgba(255, 255, 255, 1); /* Dark blue background */
+  background-image: radial-gradient(#0000002c 1px, transparent 1px);
+  background-size: 12px 12px; /* Space between dots */
+}
+
+/* Hide scrollbars for iframe */
+iframe {
+  scrollbar-width: none; /* Firefox */
+  -ms-overflow-style: none; /* Internet Explorer 10+ */
+}
+
+iframe::-webkit-scrollbar {
+  display: none; /* Chrome, Safari, Opera */
 }
