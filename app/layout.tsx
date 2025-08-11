@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Funnel_Display, Funnel_Sans, Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
+import Providers from "./providers";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -106,7 +107,9 @@ export default function RootLayout({
 
         {/* Desktop Content */}
         <div className="hidden md:block">
-          {children}
+          <Providers>
+            {children}
+          </Providers>
         </div>
       </body>
     </html>

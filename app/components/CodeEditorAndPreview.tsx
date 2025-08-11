@@ -4,12 +4,18 @@ import { useState } from 'react';
 import { CodeEditor } from './CodeEditor';
 import { Preview } from './Preview';
 import { DevelopmentLogs } from './DevelopmentLogs';
+import { PublishModal } from './PublishModal';
 
 interface GeneratedProject {
     projectId: string;
     port: number;
     url: string;
     generatedFiles?: string[];
+    previewUrl?: string;
+    vercelUrl?: string;
+    aliasSuccess?: boolean;
+    isNewDeployment?: boolean;
+    hasPackageChanges?: boolean;
 }
 
 interface CodeEditorAndPreviewProps {
@@ -29,6 +35,7 @@ export function CodeEditorAndPreview({
 }: CodeEditorAndPreviewProps) {
     const [viewMode, setViewMode] = useState<ViewMode>('code');
     const [showLogs, setShowLogs] = useState(false);
+    const [showPublishModal, setShowPublishModal] = useState(false);
 
     const getViewModeIcon = (mode: ViewMode) => {
         switch (mode) {
@@ -109,7 +116,7 @@ export function CodeEditorAndPreview({
                         <div className="flex flex-col">
                             <div className="text-xs text-black-60 font-medium">Project URL</div>
                             <div className="text-xs text-black font-mono">
-                                preview.minidev.fun/p/{currentProject.projectId}
+                                {currentProject.url}
                             </div>
                         </div>
                         <button
@@ -132,6 +139,13 @@ export function CodeEditorAndPreview({
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
                             </svg>
                         </button>
+                        <button
+                            onClick={() => setShowPublishModal(true)}
+                            className="px-3 py-2 bg-black text-white rounded hover:bg-black-80 transition-colors text-sm font-medium cursor-pointer"
+                            title="Publish to Farcaster"
+                        >
+                            Publish
+                        </button>
                     </div>
                 )}
             </div>
@@ -152,6 +166,13 @@ export function CodeEditorAndPreview({
                     <Preview currentProject={currentProject} />
                 </div>
             </div>
+
+            {/* Publish Modal */}
+            <PublishModal
+                isOpen={showPublishModal}
+                onClose={() => setShowPublishModal(false)}
+                projectUrl={currentProject?.url}
+            />
         </div>
     );
 } 

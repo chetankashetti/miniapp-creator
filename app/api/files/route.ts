@@ -8,6 +8,7 @@ import {
   updateGeneratedFile,
   deleteGeneratedFile,
 } from "../../../lib/previewManager";
+import { headers } from "next/headers";
 
 // GET: List files or fetch file content from generated directory
 export async function GET(request: NextRequest) {
@@ -122,6 +123,16 @@ export async function GET(request: NextRequest) {
 export async function PUT(request: NextRequest) {
   try {
     const { projectId, filename, content } = await request.json();
+    const accessToken = (await headers())
+      .get("authorization")
+      ?.replace("Bearer ", "");
+
+    if (!accessToken) {
+      return NextResponse.json(
+        { error: "Missing access token" },
+        { status: 401 }
+      );
+    }
 
     console.log(
       `💾 PUT request - projectId: ${projectId}, filename: ${filename}`
@@ -152,7 +163,7 @@ export async function PUT(request: NextRequest) {
 
     // Update the preview with the new file
     try {
-      await updatePreviewFiles(projectId, [{ filename, content }]);
+      await updatePreviewFiles(projectId, [{ filename, content }], accessToken);
       console.log(`✅ Preview updated with file: ${filename}`);
     } catch (error) {
       console.error(`❌ Failed to update preview for ${filename}:`, error);

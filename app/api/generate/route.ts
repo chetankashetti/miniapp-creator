@@ -11,11 +11,10 @@ import {
   updatePreviewFiles,
   saveFilesToGenerated,
   getPreviewUrl,
-  deletePreview,
 } from "../../../lib/previewManager";
 
 // Import the API base URL
-const PREVIEW_API_BASE = "https://preview.minidev.fun";
+const PREVIEW_API_BASE = "minidev.fun";
 import {
   // getOptimizedSystemPrompt,
   // createOptimizedUserPrompt,
@@ -23,6 +22,7 @@ import {
   STAGE_MODEL_CONFIG,
   ANTHROPIC_MODELS,
 } from "../../../lib/llmOptimizer";
+import { headers } from "next/headers";
 
 // Utility: Recursively read all files in a directory, excluding node_modules, .next, and other build artifacts
 async function readAllFiles(
@@ -280,6 +280,17 @@ function estimateCost(
 export async function POST(request: NextRequest) {
   try {
     const { prompt, useMultiStage = true } = await request.json();
+    const accessToken = (await headers())
+      .get("authorization")
+      ?.replace("Bearer ", "");
+
+    if (!accessToken) {
+      return NextResponse.json(
+        { error: "Missing access token" },
+        { status: 401 }
+      );
+    }
+
     if (!prompt) {
       return NextResponse.json({ error: "Missing prompt" }, { status: 400 });
     }
@@ -456,7 +467,11 @@ export async function POST(request: NextRequest) {
 
     // Create preview with all generated files
     console.log("🚀 Creating preview with generated files...");
-    const previewData = await createPreview(projectId, generatedFiles);
+    const previewData = await createPreview(
+      projectId,
+      generatedFiles,
+      accessToken
+    );
     console.log("✅ Preview created successfully");
 
     // Get the full preview URL
@@ -478,7 +493,7 @@ export async function POST(request: NextRequest) {
     }
 
     const projectUrl =
-      getPreviewUrl(projectId) || `${PREVIEW_API_BASE}/p/${projectId}`;
+      getPreviewUrl(projectId) || `https://${projectId}.${PREVIEW_API_BASE}`;
     console.log(`🎉 Project ready at: ${projectUrl}`);
 
     return NextResponse.json({
@@ -504,32 +519,20 @@ export async function POST(request: NextRequest) {
   }
 }
 
-export async function DELETE(request: NextRequest) {
-  try {
-    const { projectId } = await request.json();
-    if (!projectId) {
-      return NextResponse.json({ error: "Missing projectId" }, { status: 400 });
-    }
-    await deletePreview(projectId);
-    const userDir = path.join(process.cwd(), "generated", projectId);
-    await fs.remove(userDir);
-    return NextResponse.json({ success: true });
-  } catch (err) {
-    console.error("Error cleaning up project:", err);
-    return NextResponse.json(
-      {
-        error: "Failed to cleanup project",
-        details: err instanceof Error ? err.message : String(err),
-        stack: err instanceof Error && err.stack ? err.stack : undefined,
-      },
-      { status: 500 }
-    );
-  }
-}
-
 export async function PATCH(request: NextRequest) {
   try {
     const { projectId, prompt, stream = false } = await request.json();
+    const accessToken = (await headers())
+      .get("authorization")
+      ?.replace("Bearer ", "");
+
+    if (!accessToken) {
+      return NextResponse.json(
+        { error: "Missing access token" },
+        { status: 401 }
+      );
+    }
+
     if (!projectId || !prompt) {
       return NextResponse.json(
         { error: "Missing projectId or prompt" },
@@ -631,7 +634,7 @@ export async function PATCH(request: NextRequest) {
 
       // Update files in the preview
       console.log("Updating files in preview...");
-      await updatePreviewFiles(projectId, generatedFiles);
+      await updatePreviewFiles(projectId, generatedFiles, accessToken);
       console.log("Preview files updated successfully");
 
       // Handle package.json changes (just log for now since we're not managing dependencies in preview)

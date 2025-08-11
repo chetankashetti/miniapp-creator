@@ -11,6 +11,11 @@ interface GeneratedProject {
     port: number;
     url: string;
     generatedFiles?: string[];
+    previewUrl?: string;
+    vercelUrl?: string;
+    aliasSuccess?: boolean;
+    isNewDeployment?: boolean;
+    hasPackageChanges?: boolean;
 }
 
 interface CodeEditorProps {

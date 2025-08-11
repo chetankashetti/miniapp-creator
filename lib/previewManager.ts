@@ -2,20 +2,20 @@ import fs from "fs-extra";
 import path from "path";
 
 // Store active previews for management
-const activePreviews = new Map<
-  string,
-  { url: string; status: string; port: number }
->();
+const activePreviews = new Map<string, PreviewResponse>();
 
 // Preview API configuration
-const PREVIEW_API_BASE = "https://preview.minidev.fun";
-const PREVIEW_API_TOKEN =
-  "3c4249784fcbd545c5322185e2e64a8c270005ae7c0729b0cf3ffb13023ba396";
+const PREVIEW_API_BASE = process.env.PREVIEW_API_BASE;
 
 export interface PreviewResponse {
   url: string;
   status: string;
   port: number;
+  previewUrl?: string;
+  vercelUrl?: string;
+  aliasSuccess?: boolean;
+  isNewDeployment?: boolean;
+  hasPackageChanges?: boolean;
 }
 
 export interface PreviewFile {
@@ -26,27 +26,29 @@ export interface PreviewFile {
 // Create a preview using the external API
 export async function createPreview(
   projectId: string,
-  files: { filename: string; content: string }[]
+  files: { filename: string; content: string }[],
+  accessToken: string
 ): Promise<PreviewResponse> {
   console.log(`🚀 Creating preview for project: ${projectId}`);
 
   try {
-    // Convert files to the format expected by the API
-    const apiFiles: PreviewFile[] = files.map((file) => ({
-      path: file.filename,
-      content: file.content,
-    }));
+    // Convert files array to object format expected by the API
+    const filesObject: { [key: string]: string } = {};
+    files.forEach((file) => {
+      filesObject[file.filename] = file.content;
+    });
 
     // Make API request to create preview
-    const response = await fetch(`${PREVIEW_API_BASE}/previews`, {
+    const response = await fetch(`${PREVIEW_API_BASE}/deploy`, {
       method: "POST",
       headers: {
+        Authorization: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
-        Authorization: `Bearer ${PREVIEW_API_TOKEN}`,
+        // Authorization: `Bearer ${PREVIEW_API_TOKEN}`,
       },
       body: JSON.stringify({
-        id: projectId,
-        files: apiFiles,
+        hash: projectId,
+        files: filesObject,
       }),
     });
 
@@ -57,13 +59,32 @@ export async function createPreview(
       );
     }
 
-    const previewData: PreviewResponse = await response.json();
+    const apiResponse = await response.json();
+
+    // Map the API response to our PreviewResponse format
+    const previewData: PreviewResponse = {
+      url:
+        `https://${apiResponse.previewUrl}` ||
+        `https://${projectId}.minidev.fun`,
+      status: apiResponse.isNewDeployment ? "deployed" : "updated",
+      port: 3000, // Default port for Next.js apps
+      previewUrl: apiResponse.previewUrl
+        ? `https://${apiResponse.previewUrl}`
+        : "",
+      vercelUrl: apiResponse.vercelUrl,
+      aliasSuccess: apiResponse.aliasSuccess,
+      isNewDeployment: apiResponse.isNewDeployment,
+      hasPackageChanges: apiResponse.hasPackageChanges,
+    };
 
     // Store the preview info
     activePreviews.set(projectId, previewData);
 
     console.log(`✅ Preview created successfully: ${previewData.url}`);
-    console.log(`📊 Status: ${previewData.status}, Port: ${previewData.port}`);
+    console.log(`📊 Preview URL: ${previewData.previewUrl}`);
+    console.log(`🌐 Vercel URL: ${previewData.vercelUrl}`);
+    console.log(`📦 Package Changes: ${previewData.hasPackageChanges}`);
+    console.log(`🆕 New Deployment: ${previewData.isNewDeployment}`);
 
     return previewData;
   } catch (error) {
@@ -75,29 +96,29 @@ export async function createPreview(
 // Update files in an existing preview
 export async function updatePreviewFiles(
   projectId: string,
-  changedFiles: { filename: string; content: string }[]
+  changedFiles: { filename: string; content: string }[],
+  accessToken: string
 ): Promise<void> {
   console.log(
     `🔄 Updating ${changedFiles.length} files in preview for project: ${projectId}`
   );
 
   try {
-    // Convert files to the format expected by the API
-    const apiFiles: PreviewFile[] = changedFiles.map((file) => ({
-      path: file.filename,
-      content: file.content,
-    }));
-
+    // Convert files array to object format expected by the API
+    const filesObject: { [key: string]: string } = {};
+    changedFiles.forEach((file) => {
+      filesObject[file.filename] = file.content;
+    });
     // Make API request to update preview (uses POST with same endpoint)
-    const response = await fetch(`${PREVIEW_API_BASE}/previews`, {
+    const response = await fetch(`${PREVIEW_API_BASE}/deploy`, {
       method: "POST",
       headers: {
+        Authorization: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
-        Authorization: `Bearer ${PREVIEW_API_TOKEN}`,
       },
       body: JSON.stringify({
-        id: projectId,
-        files: apiFiles,
+        hash: projectId,
+        files: filesObject,
       }),
     });
 
@@ -108,63 +129,12 @@ export async function updatePreviewFiles(
       );
     }
 
+    // Handle the response from the update API
+    const updateResponse = await response.json();
     console.log(`✅ Preview files updated successfully for ${projectId}`);
+    console.log(`📊 Update Response:`, updateResponse);
   } catch (error) {
     console.error(`❌ Failed to update preview files for ${projectId}:`, error);
-    throw error;
-  }
-}
-
-// Get preview status
-export async function getPreviewStatus(
-  projectId: string
-): Promise<PreviewResponse | null> {
-  try {
-    const response = await fetch(`${PREVIEW_API_BASE}/previews/${projectId}`, {
-      headers: {
-        Authorization: `Bearer ${PREVIEW_API_TOKEN}`,
-      },
-    });
-
-    if (!response.ok) {
-      if (response.status === 404) {
-        return null; // Preview doesn't exist
-      }
-      throw new Error(`Failed to get preview status: ${response.status}`);
-    }
-
-    const previewData: PreviewResponse = await response.json();
-    activePreviews.set(projectId, previewData);
-    return previewData;
-  } catch (error) {
-    console.error(`❌ Failed to get preview status for ${projectId}:`, error);
-    return null;
-  }
-}
-
-// Delete a preview
-export async function deletePreview(projectId: string): Promise<void> {
-  console.log(`🗑️ Deleting preview for project: ${projectId}`);
-
-  try {
-    const response = await fetch(`${PREVIEW_API_BASE}/previews/${projectId}`, {
-      method: "DELETE",
-      headers: {
-        Authorization: `Bearer ${PREVIEW_API_TOKEN}`,
-      },
-    });
-
-    if (!response.ok && response.status !== 404) {
-      const errorText = await response.text();
-      throw new Error(
-        `Failed to delete preview: ${response.status} ${errorText}`
-      );
-    }
-
-    activePreviews.delete(projectId);
-    console.log(`✅ Preview deleted successfully for ${projectId}`);
-  } catch (error) {
-    console.error(`❌ Failed to delete preview for ${projectId}:`, error);
     throw error;
   }
 }
@@ -176,7 +146,8 @@ export function getPreviewUrl(projectId: string): string | null {
     return null;
   }
 
-  return `${PREVIEW_API_BASE}${preview.url}`;
+  // Use the previewUrl from the API response if available, otherwise fallback to the url field
+  return preview.previewUrl || preview.url;
 }
 
 // Save files to local generated directory

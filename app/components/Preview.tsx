@@ -4,6 +4,11 @@ interface GeneratedProject {
     port: number;
     url: string;
     generatedFiles?: string[];
+    previewUrl?: string;
+    vercelUrl?: string;
+    aliasSuccess?: boolean;
+    isNewDeployment?: boolean;
+    hasPackageChanges?: boolean;
 }
 
 interface PreviewProps {
@@ -32,11 +37,11 @@ export function Preview({ currentProject }: PreviewProps) {
                     {/* iPhone frame */}
                     <div className="bg-black rounded-[40px] shadow-2xl p-2 border-4 border-gray-800 relative">
                         <iframe
-                            src={currentProject.url}
+                            src={currentProject.previewUrl || currentProject.url}
                             className="w-full h-full rounded-[32px] border-0 bg-white"
                             title="Generated App Preview"
                             allow="fullscreen; camera; microphone; gyroscope; accelerometer; geolocation; clipboard-write; autoplay"
-                            data-origin={currentProject.url}
+                            data-origin={currentProject.previewUrl || currentProject.url}
                             data-v0="true"
                             loading="eager"
                             sandbox="allow-scripts allow-same-origin allow-forms allow-downloads allow-popups-to-escape-sandbox allow-pointer-lock allow-popups allow-modals allow-orientation-lock allow-presentation"

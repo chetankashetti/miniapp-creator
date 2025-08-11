@@ -4,12 +4,18 @@ import { useState, useRef, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Icons } from './sections/icons';
+import { usePrivy } from '@privy-io/react-auth';
 
 interface GeneratedProject {
     projectId: string;
     port: number;
     url: string;
     generatedFiles?: string[];
+    previewUrl?: string;
+    vercelUrl?: string;
+    aliasSuccess?: boolean;
+    isNewDeployment?: boolean;
+    hasPackageChanges?: boolean;
 }
 
 interface ChatMessage {
@@ -35,6 +41,8 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
     const [hasShownWarning, setHasShownWarning] = useState(false);
     const chatBottomRef = useRef<HTMLDivElement>(null);
     const chatContainerRef = useRef<HTMLDivElement>(null);
+    const { getAccessToken } = usePrivy();
+
 
     // Chat session state
     const [chatSessionId, setChatSessionId] = useState<string>('');
@@ -85,8 +93,10 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
 
     const handleSendMessage = async (userMessage: string) => {
         if (!chatSessionId) return;
-
+        const accessToken = await getAccessToken();
+        // setPrompt('');
         setAiLoading(true);
+
         // setError(null);
 
         // Add user message immediately
@@ -99,8 +109,8 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
         setChat(prev => [...prev, userMsg]);
 
         try {
-            let endpoint = '/api/chat';
-            let body: {
+            const endpoint = '/api/chat';
+            const body: {
                 sessionId: string;
                 message: string;
                 stream: boolean;
@@ -121,18 +131,68 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
             } else if (currentPhase === 'building') {
                 body.action = 'confirm_project';
             } else {
-                // For editing phase, use the generate endpoint
-                endpoint = '/api/generate';
-                body = {
-                    projectId: currentProject?.projectId,
-                    prompt: userMessage,
-                    stream: true
-                };
+                // For editing phase, directly apply changes without streaming conversation
+                console.log('🔄 Directly applying changes to existing project...');
+
+                try {
+                    // Add processing message
+                    setChat(prev => [
+                        ...prev,
+                        {
+                            role: 'ai',
+                            content: 'Processing your request and updating the project...',
+                            phase: 'editing',
+                            timestamp: Date.now()
+                        }
+                    ]);
+
+                    // Directly call the multi-stage pipeline for updates
+                    const updateResponse = await fetch('/api/generate', {
+                        method: 'PATCH',
+                        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${accessToken}` },
+                        body: JSON.stringify({
+                            projectId: currentProject?.projectId,
+                            prompt: userMessage,
+                            stream: false
+                        }),
+                    });
+
+                    if (updateResponse.ok) {
+                        const updateData = await updateResponse.json();
+                        console.log('✅ Changes applied successfully:', updateData.changed);
+
+                        // Update the last AI message with success
+                        setChat(prev => {
+                            const newChat = [...prev];
+                            if (newChat.length > 0 && newChat[newChat.length - 1].role === 'ai') {
+                                newChat[newChat.length - 1].content = `Changes applied successfully! I've updated ${updateData.changed?.length || 0} files. The preview should reflect your changes shortly.`;
+                                newChat[newChat.length - 1].changedFiles = updateData.changed || [];
+                            }
+                            return newChat;
+                        });
+                    } else {
+                        const errorData = await updateResponse.json();
+                        throw new Error(errorData.error || 'Failed to apply changes');
+                    }
+                } catch (updateError) {
+                    console.error('Failed to apply changes:', updateError);
+
+                    // Update the last AI message with error
+                    setChat(prev => {
+                        const newChat = [...prev];
+                        if (newChat.length > 0 && newChat[newChat.length - 1].role === 'ai') {
+                            newChat[newChat.length - 1].content = '❌ Sorry, I encountered an error while applying the changes. Please try again.';
+                        }
+                        return newChat;
+                    });
+                }
+
+                return; // Skip the rest of the function since we handled the editing phase
             }
 
             const response = await fetch(endpoint, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${accessToken}` },
                 body: JSON.stringify(body),
             });
 
@@ -141,98 +201,43 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
                 throw new Error(errorData.error || 'Failed to process message');
             }
 
-            if (currentPhase === 'editing') {
-                // Handle streaming response for editing phase
-                const reader = response.body?.getReader();
-                if (!reader) {
-                    throw new Error('No response body');
-                }
+            // Handle non-streaming response for requirements/building phases
+            const data = await response.json();
+            const aiResponse = data.response;
 
-                let aiResponse = '';
-                const decoder = new TextDecoder();
+            // Add AI message to chat
+            const aiMsg: ChatMessage = {
+                role: 'ai',
+                content: aiResponse,
+                phase: currentPhase,
+                timestamp: Date.now()
+            };
+            setChat(prev => [...prev, aiMsg]);
 
-                // Add AI message placeholder for streaming
-                setChat(prev => [
-                    ...prev,
-                    { role: 'ai', content: '', phase: 'editing', timestamp: Date.now() }
-                ]);
+            // Check if we should transition to building phase
+            if (currentPhase === 'requirements') {
+                const aiResponseLower = aiResponse.toLowerCase();
+                const isConfirmedByText = aiResponseLower.includes('proceed to build') ||
+                    aiResponseLower.includes('building your miniapp') ||
+                    aiResponseLower.includes('creating all the necessary files') ||
+                    aiResponseLower.includes('perfect! i\'ll now proceed') ||
+                    aiResponseLower.includes('proceeding to build');
 
-                try {
-                    while (true) {
-                        const { done, value } = await reader.read();
-                        if (done) break;
+                const isConfirmedByAPI = data.projectConfirmed === true;
 
-                        const chunk = decoder.decode(value);
-                        const lines = chunk.split('\n');
+                if (isConfirmedByText || isConfirmedByAPI) {
+                    console.log('✅ Project confirmation detected! Transitioning to building phase...');
+                    setCurrentPhase('building');
 
-                        for (const line of lines) {
-                            if (line.startsWith('data: ')) {
-                                const data = line.slice(6);
-                                if (data === '[DONE]') break;
+                    // Use the AI's analysis as the final prompt
+                    const finalPrompt = aiResponse;
 
-                                try {
-                                    const parsed = JSON.parse(data);
-                                    if (parsed.type === 'content_block_delta' && parsed.delta?.text) {
-                                        aiResponse += parsed.delta.text;
-
-                                        // Update the last AI message with streaming content
-                                        setChat(prev => {
-                                            const newChat = [...prev];
-                                            if (newChat.length > 0 && newChat[newChat.length - 1].role === 'ai') {
-                                                newChat[newChat.length - 1].content = aiResponse;
-                                            }
-                                            return newChat;
-                                        });
-                                    }
-                                } catch {
-                                    // Ignore parsing errors for incomplete chunks
-                                }
-                            }
-                        }
-                    }
-                } finally {
-                    reader.releaseLock();
-                }
-            } else {
-                // Handle non-streaming response for requirements/building phases
-                const data = await response.json();
-                const aiResponse = data.response;
-
-                // Add AI message to chat
-                const aiMsg: ChatMessage = {
-                    role: 'ai',
-                    content: aiResponse,
-                    phase: currentPhase,
-                    timestamp: Date.now()
-                };
-                setChat(prev => [...prev, aiMsg]);
-
-                // Check if we should transition to building phase
-                if (currentPhase === 'requirements') {
-                    const aiResponseLower = aiResponse.toLowerCase();
-                    const isConfirmedByText = aiResponseLower.includes('proceed to build') ||
-                        aiResponseLower.includes('building your miniapp') ||
-                        aiResponseLower.includes('creating all the necessary files') ||
-                        aiResponseLower.includes('perfect! i\'ll now proceed') ||
-                        aiResponseLower.includes('proceeding to build');
-
-                    const isConfirmedByAPI = data.projectConfirmed === true;
-
-                    if (isConfirmedByText || isConfirmedByAPI) {
-                        console.log('✅ Project confirmation detected! Transitioning to building phase...');
-                        setCurrentPhase('building');
-
-                        // Use the AI's analysis as the final prompt
-                        const finalPrompt = aiResponse;
-
-                        console.log('🚀 Triggering project generation with AI analysis:', finalPrompt.substring(0, 200) + '...');
-                        setTimeout(() => {
-                            handleGenerateProject(aiResponse);
-                        }, 1000);
-                    }
+                    console.log('🚀 Triggering project generation with AI analysis:', finalPrompt.substring(0, 200) + '...');
+                    setTimeout(() => {
+                        handleGenerateProject(aiResponse);
+                    }, 1000);
                 }
             }
-
         } catch (err) {
             console.error('Error:', err);
             // setError(err instanceof Error ? err.message : 'An error occurred');
@@ -256,6 +261,7 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
             // setError('Please enter a prompt');
             return;
         }
+        const accessToken = await getAccessToken();
         setIsGenerating(true);
         // setError(null);
         try {
@@ -265,7 +271,7 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
 
             const response = await fetch('/api/generate', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${accessToken}` },
                 body: JSON.stringify({ prompt: generationPrompt }),
             });
             if (!response.ok) {
@@ -295,13 +301,13 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
             ]);
         } catch (err) {
             const errorMessage = err instanceof Error ? err.message : 'An error occurred';
-            console.error('Generation failed:', err);
+            console.error('Generation failed:', errorMessage);
             // setError(errorMessage);
             setChat(prev => [
                 ...prev,
                 {
                     role: 'ai',
-                    content: `❌ Failed to generate project: ${errorMessage}`,
+                    content: `❌ Failed to generate project, Please try again.`,
                     phase: 'building',
                     timestamp: Date.now()
                 }
@@ -310,6 +316,24 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
             setIsGenerating(false);
         }
     };
+
+    const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+    const adjustTextareaHeight = () => {
+        const textarea = textareaRef.current;
+        if (textarea) {
+            textarea.style.height = 'auto';
+            textarea.style.height = `${Math.min(textarea.scrollHeight, 200)}px`;
+        }
+    };
+
+    const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+        setPrompt(e.target.value);
+    };
+
+    useEffect(() => {
+        adjustTextareaHeight();
+    }, [prompt]);
 
     // const handleCleanup = async () => {
     //     if (!currentProject) return;
@@ -363,7 +387,7 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
                     {chat.map((msg, idx) => (
                         <div key={idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                             <div className={`rounded-lg px-4 py-2 max-w-[80%] text-sm ${msg.role === 'user'
-                                ? 'bg-white text-black'
+                                ? 'bg-white text-black break-all'
                                 : 'bg-transparent text-black'
                                 }`}>
                                 {/* <div className="flex items-center gap-2 mb-1">
@@ -431,9 +455,9 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
                             handleSendMessage(prompt.trim());
                         }
                     }}
-                    className="bg-transparent text-black rounded-full p-2 border-2 border-black-10 mb-2 flex items-center"
+                    className="bg-transparent text-black rounded-3xl p-2 border-2 border-black-10 mb-2 flex flex-col items-center gap-1"
                 >
-                    <input
+                    {/* <input
                         value={prompt}
                         onChange={e => setPrompt(e.target.value)}
                         placeholder={
@@ -445,10 +469,27 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
                         }
                         className="flex-1 resize-none p-2 px-4 bg-transparent rounded-lg border-none focus:outline-none focus:border-none font-funnel-sans text-black-80 font-semibold"
                         disabled={aiLoading || isGenerating}
+                    /> */}
+                    <textarea
+                        ref={textareaRef}
+                        value={prompt}
+                        onChange={handleInputChange}
+                        placeholder="Ask Minidev"
+                        className="w-full max-w-full max-h-[100px] overflow-y-auto resize-none p-2 bg-transparent rounded-lg border-none focus:outline-none focus:border-none font-funnel-sans text-black-80 font-medium max-h-[100px]"
+                        disabled={aiLoading || isGenerating}
+                        rows={1}
+                        onKeyDown={(e) => {
+                            if (e.key === 'Enter' && !e.shiftKey) {
+                                e.preventDefault();
+                                if (prompt.trim() && !aiLoading) {
+                                    handleSendMessage(prompt.trim());
+                                }
+                            }
+                        }}
                     />
                     <button
                         type="submit"
-                        className="p-2 bg-black-80 rounded-full disabled:opacity-50"
+                        className="p-2 bg-black-80 rounded-full disabled:opacity-50 ml-auto"
                         disabled={aiLoading || isGenerating || !prompt.trim()}
                     >
                         {aiLoading ? (

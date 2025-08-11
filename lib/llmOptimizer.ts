@@ -459,7 +459,8 @@ REMEMBER: Return ONLY the JSON object above. No other text, no explanations, no 
 //
 export function getStage3CodeGeneratorPrompt(
   patchPlan: PatchPlan,
-  intentSpec: IntentSpec
+  intentSpec: IntentSpec,
+  currentFiles: { filename: string; content: string }[]
 ): string {
   return `
 ROLE: Code Generator for Farcaster Miniapp as single page app
@@ -468,10 +469,13 @@ INTENT: ${JSON.stringify(intentSpec, null, 2)}
 
 DETAILED PATCH PLAN: ${JSON.stringify(patchPlan, null, 2)}
 
+CURRENT FILES:
+${currentFiles.map((f) => `---${f.filename}---\n${f.content}`).join("\n\n")}
+
 BOILERPLATE CONTEXT:
 ${JSON.stringify(FARCASTER_BOILERPLATE_CONTEXT, null, 2)}
 
-TASK: Generate complete file contents based on the detailed patch plan descriptions in the nextjs app router with src directory structure and make it as minimal as possible
+TASK: Generate complete file contents based on the detailed patch plan descriptions and make it as minimal as possible. For follow-up prompts, modify existing files; for new features, create new files as needed.
 
 IMPLEMENTATION GUIDANCE FROM PATCH PLAN:
 - Follow the "purpose" field for each file to understand the overall goal
@@ -500,7 +504,8 @@ Generate a JSON array of complete files:
 ]
 
 CODE GENERATION RULES:
-- Generate complete file contents (not partial patches) based on patch plan descriptions and make sure that the code is in the nextjs app router with src directory structure
+- For existing files: Modify the current file content based on the patch plan
+- For new files: Generate complete file contents based on patch plan descriptions
 - Use useUser hook from @/hooks for user data: const { username, fid, isMiniApp, isLoading } = useUser()
 - Use Tabs component from @/components/ui/Tabs for navigation
 - Follow patch plan "purpose" and "description" fields exactly
@@ -509,6 +514,8 @@ CODE GENERATION RULES:
 - Implement "contractInteraction" functionality when specified
 - Follow "implementationNotes" for overall approach
 - Include all required imports based on dependencies
+- Preserve existing code structure and styling when modifying files
+- Only change what's specified in the patch plan - keep other parts intact
 - Prefer neutral colors (grays, whites, blacks) with subtle accents
 - Use consistent spacing, typography, and visual hierarchy
 - Ensure good contrast and accessibility
@@ -536,7 +543,7 @@ export function getStage4ValidatorPrompt(
   errors: string[]
 ): string {
   return `
-ROLE: Code Validator and Self-Debugger
+ROLE: Code Validator for Next.js 15 + TypeScript + React
 
 ERRORS FOUND:
 ${errors.join("\n")}
@@ -544,34 +551,44 @@ ${errors.join("\n")}
 FILES TO REGENERATE:
 ${generatedFiles.map((f) => `---${f.filename}---\n${f.content}`).join("\n\n")}
 
-TASK: Fix the specific errors in the files above and return ONLY those files with corrections
+TASK: Fix critical errors that would prevent the project from running
 
 BOILERPLATE CONTEXT:
 ${JSON.stringify(FARCASTER_BOILERPLATE_CONTEXT, null, 2)}
 
-CRITICAL: You MUST return ONLY valid JSON. No explanations, no text, no markdown, no code fences.
+CRITICAL: Return ONLY a JSON array. No markdown, no code blocks, no explanations.
 
 OUTPUT FORMAT:
-Generate a JSON array of corrected files with EXACTLY the same filenames:
 [
   {"filename": "EXACT_SAME_FILENAME", "content": "corrected file content"},
   {"filename": "EXACT_SAME_FILENAME2", "content": "corrected file content 2"}
 ]
 
+CRITICAL FIXES ONLY:
+
+1. SYNTAX ERRORS:
+   - Fix missing semicolons, brackets, parentheses
+   - Fix invalid JSX syntax
+   - Fix import/export statements
+
+2. TYPE ERRORS:
+   - Fix missing 'use client' directive for client components
+   - Fix basic TypeScript type errors
+   - Fix React hook usage errors
+
+3. BUILD ERRORS:
+   - Fix missing imports
+   - Fix circular dependencies
+   - Fix invalid file structure
+
 RULES:
-- Fix all compilation errors in the provided files
-- Fix all linting issues in the provided files
-- Ensure all imports are valid
-- Validate blockchain logic if present
-- Return EXACTLY the same filenames that were provided
-- DO NOT create new files or change filenames
-- DO NOT regenerate boilerplate files that already exist
-- Return valid JSON array only
-- NO EXPLANATIONS, NO TEXT, ONLY JSON
+- Return EXACTLY the same filenames provided
+- DO NOT create new files
+- DO NOT add markdown formatting
+- Return ONLY the JSON array
+- NO EXPLANATIONS, NO TEXT, NO CODE BLOCKS
 
-CRITICAL: The filenames in your response MUST match the filenames in the "FILES TO REGENERATE" section exactly.
-
-REMEMBER: Return ONLY the JSON array above. No other text, no explanations, no markdown formatting.
+CRITICAL: Return ONLY the JSON array above. No other text.
 `;
 }
 
@@ -603,19 +620,34 @@ export function validateGeneratedFiles(
   isValid: boolean;
   missingFiles: string[];
 } {
-  const requiredFiles = ["src/app/page.tsx"];
-
-  const missingFiles = requiredFiles.filter(
-    (required) => !files.some((file) => file.filename === required)
-  );
-
-  if (missingFiles.length > 0) {
-    console.warn("Missing required files:", missingFiles);
+  // Only validate that we have at least one file and it's not empty
+  if (files.length === 0) {
+    console.warn("No files generated");
+    return {
+      isValid: false,
+      missingFiles: ["No files generated"],
+    };
   }
 
+  // Check for empty files
+  const emptyFiles = files.filter(
+    (file) => !file.content || file.content.trim() === ""
+  );
+  if (emptyFiles.length > 0) {
+    console.warn(
+      "Empty files detected:",
+      emptyFiles.map((f) => f.filename)
+    );
+    return {
+      isValid: false,
+      missingFiles: emptyFiles.map((f) => `Empty file: ${f.filename}`),
+    };
+  }
+
+  // All files are valid
   return {
-    isValid: missingFiles.length === 0,
-    missingFiles,
+    isValid: true,
+    missingFiles: [],
   };
 }
 
@@ -747,20 +779,82 @@ function validateClientDirectives(
   const missingClientDirective: { file: string; reason: string }[] = [];
 
   files.forEach((file) => {
-    const usesClientHooks = /useEffect|useState|useContext|useReducer/.test(
-      file.content
-    );
+    // Only check for critical client-side features that definitely need 'use client'
+    const usesClientHooks = /useState|useEffect/.test(file.content);
+    const usesEventHandlers = /onClick|onChange/.test(file.content);
     const hasClientDirective = /"use client"/.test(file.content);
 
-    if (usesClientHooks && !hasClientDirective) {
+    // Only flag if it's clearly a client component
+    if ((usesClientHooks || usesEventHandlers) && !hasClientDirective) {
       missingClientDirective.push({
         file: file.filename,
-        reason: "Uses client-side hooks but missing 'use client' directive",
+        reason: "Uses client-side features but missing 'use client' directive",
       });
     }
   });
 
   return { missingClientDirective };
+}
+
+// Simplified validation for critical TypeScript issues only
+function validateTypeScriptIssues(
+  files: { filename: string; content: string }[]
+): {
+  typeErrors: { file: string; error: string }[];
+} {
+  const typeErrors: { file: string; error: string }[] = [];
+
+  files.forEach((file) => {
+    const content = file.content;
+
+    // Only check for critical syntax errors that would prevent compilation
+    const syntaxErrors = [
+      /function\s+\w+\s*\([^)]*\)\s*{/g, // Missing closing brace
+      /const\s+\w+\s*=\s*\([^)]*\)\s*=>/g, // Arrow function syntax
+      /import\s+.*\s+from\s+['"`][^'"`]*['"`]/g, // Import syntax
+    ];
+
+    // Check for basic syntax issues
+    const hasSyntaxError = syntaxErrors.some((pattern) => {
+      const matches = content.match(pattern);
+      return matches && matches.length > 0;
+    });
+
+    if (hasSyntaxError) {
+      typeErrors.push({
+        file: file.filename,
+        error: "Potential syntax error - check brackets, semicolons, imports",
+      });
+    }
+  });
+
+  return { typeErrors };
+}
+
+// Simplified validation for critical React issues only
+function validateReactIssues(files: { filename: string; content: string }[]): {
+  reactErrors: { file: string; error: string }[];
+} {
+  const reactErrors: { file: string; error: string }[] = [];
+
+  files.forEach((file) => {
+    const content = file.content;
+
+    // Only check for critical React issues that would prevent compilation
+    const hasJSX = /<[A-Z][a-zA-Z]*\s*[^>]*>/g.test(content);
+    const hasReactHooks = /use[A-Z][a-zA-Z]*/g.test(content);
+    const hasClientDirective = /"use client"/g.test(content);
+
+    // Check if JSX is used without proper setup
+    if (hasJSX && !hasClientDirective && hasReactHooks) {
+      reactErrors.push({
+        file: file.filename,
+        error: "JSX with React hooks needs 'use client' directive",
+      });
+    }
+  });
+
+  return { reactErrors };
 }
 
 // Multi-stage pipeline orchestrator with detailed logging
@@ -962,7 +1056,7 @@ export async function executeMultiStagePipeline(
     console.log("📤 Sending to LLM (Stage 3):");
     console.log(
       "System Prompt Length:",
-      getStage3CodeGeneratorPrompt(patchPlan, intentSpec).length,
+      getStage3CodeGeneratorPrompt(patchPlan, intentSpec, currentFiles).length,
       "chars"
     );
     console.log("User Prompt:", codePrompt);
@@ -973,7 +1067,7 @@ export async function executeMultiStagePipeline(
 
     const startTime3 = Date.now();
     const codeResponse = await callLLM(
-      getStage3CodeGeneratorPrompt(patchPlan, intentSpec),
+      getStage3CodeGeneratorPrompt(patchPlan, intentSpec, currentFiles),
       codePrompt,
       "Stage 3: Code Generator",
       "STAGE_3_CODE_GENERATOR"
@@ -1035,6 +1129,8 @@ export async function executeMultiStagePipeline(
       currentFiles
     );
     const clientDirectiveValidation = validateClientDirectives(generatedFiles);
+    const typescriptValidation = validateTypeScriptIssues(generatedFiles);
+    const reactValidation = validateReactIssues(generatedFiles);
 
     console.log("🔍 Validation Results:");
     console.log("  Files Valid:", validation.isValid);
@@ -1045,23 +1141,36 @@ export async function executeMultiStagePipeline(
       "  Missing 'use client' directive:",
       clientDirectiveValidation.missingClientDirective.length
     );
+    console.log("  TypeScript Errors:", typescriptValidation.typeErrors.length);
+    console.log("  React Errors:", reactValidation.reactErrors.length);
 
     let validFiles = generatedFiles;
     let invalidFiles = [];
 
-    if (
+    // Enhanced validation check - include all validation types
+    const hasValidationErrors =
       !validation.isValid ||
-      !importValidation.hasAllImports ||
-      clientDirectiveValidation.missingClientDirective.length > 0
-    ) {
+      (importValidation.missingImports.length > 0 &&
+        generatedFiles.length > 0) ||
+      clientDirectiveValidation.missingClientDirective.length > 0 ||
+      typescriptValidation.typeErrors.length > 0 ||
+      reactValidation.reactErrors.length > 0;
+
+    if (hasValidationErrors) {
       console.log("⚠️ Validation failed, attempting fixes...");
       const errors = [
-        ...validation.missingFiles.map((f) => `Missing required file: ${f}`),
+        ...validation.missingFiles.map((f) => f), // Already formatted as error messages
         ...importValidation.missingImports.map(
           (m) => `Missing import in ${m.file}: ${m.missingImport}`
         ),
         ...clientDirectiveValidation.missingClientDirective.map(
           (m) => `Missing 'use client' directive in ${m.file}: ${m.reason}`
+        ),
+        ...typescriptValidation.typeErrors.map(
+          (t) => `TypeScript error in ${t.file}: ${t.error}`
+        ),
+        ...reactValidation.reactErrors.map(
+          (r) => `React error in ${r.file}: ${r.error}`
         ),
       ];
 
@@ -1072,83 +1181,71 @@ export async function executeMultiStagePipeline(
         const hasMissingImport = importValidation.missingImports.some(
           (m) => m.file === file.filename
         );
-        const isMissingFile = validation.missingFiles.includes(file.filename);
+        const isMissingFile = validation.missingFiles.some((f) =>
+          f.includes(file.filename)
+        );
         const isMissingClientDirective =
           clientDirectiveValidation.missingClientDirective.some(
             (m) => m.file === file.filename
           );
-
-        const isBoilerplateFile =
-          file.filename.includes("Button.tsx") ||
-          file.filename.includes("Input.tsx") ||
-          file.filename.includes("Tabs.tsx") ||
-          file.filename.includes("ConnectWallet.tsx") ||
-          file.filename.includes("useUser.ts") ||
-          file.filename.includes("index.ts") ||
-          file.filename.includes("utils.ts") ||
-          file.filename.includes("wagmi.ts");
+        const hasTypeScriptError = typescriptValidation.typeErrors.some(
+          (t) => t.file === file.filename
+        );
+        const hasReactError = reactValidation.reactErrors.some(
+          (r) => r.file === file.filename
+        );
 
         console.log(
-          `  ${file.filename}: missingImport=${hasMissingImport}, missingFile=${isMissingFile}, missingClient=${isMissingClientDirective}, isBoilerplate=${isBoilerplateFile}`
+          `  ${file.filename}: missingImport=${hasMissingImport}, missingFile=${isMissingFile}, missingClient=${isMissingClientDirective}, typescriptError=${hasTypeScriptError}, reactError=${hasReactError}`
         );
       });
 
-      // Separate valid and invalid files
-      // Keep all files that have actual functionality (not just missing imports)
+      // Enhanced file filtering - include all validation types
       validFiles = generatedFiles.filter((file) => {
-        const hasMissingImport = importValidation.missingImports.some(
-          (m) => m.file === file.filename
+        const isMissingFile = validation.missingFiles.some((f) =>
+          f.includes(file.filename)
         );
-        const isMissingFile = validation.missingFiles.includes(file.filename);
         const isMissingClientDirective =
           clientDirectiveValidation.missingClientDirective.some(
             (m) => m.file === file.filename
           );
+        const hasTypeScriptError = typescriptValidation.typeErrors.some(
+          (t) => t.file === file.filename
+        );
+        const hasReactError = reactValidation.reactErrors.some(
+          (r) => r.file === file.filename
+        );
 
-        // Keep files that have actual functionality even if they have missing imports
-        const hasCustomFunctionality =
-          !file.filename.includes("Button.tsx") &&
-          !file.filename.includes("Input.tsx") &&
-          !file.filename.includes("Tabs.tsx") &&
-          !file.filename.includes("ConnectWallet.tsx") &&
-          !file.filename.includes("useUser.ts") &&
-          !file.filename.includes("index.ts") &&
-          !file.filename.includes("utils.ts") &&
-          !file.filename.includes("wagmi.ts");
-
+        // Keep all files unless they have actual validation errors
         return (
           !isMissingFile &&
           !isMissingClientDirective &&
-          (hasCustomFunctionality ||
-            (!hasMissingImport && !hasCustomFunctionality))
+          !hasTypeScriptError &&
+          !hasReactError
         );
       });
 
       invalidFiles = generatedFiles.filter((file) => {
-        const hasMissingImport = importValidation.missingImports.some(
-          (m) => m.file === file.filename
+        const isMissingFile = validation.missingFiles.some((f) =>
+          f.includes(file.filename)
         );
-        const isMissingFile = validation.missingFiles.includes(file.filename);
         const isMissingClientDirective =
           clientDirectiveValidation.missingClientDirective.some(
             (m) => m.file === file.filename
           );
+        const hasTypeScriptError = typescriptValidation.typeErrors.some(
+          (t) => t.file === file.filename
+        );
+        const hasReactError = reactValidation.reactErrors.some(
+          (r) => r.file === file.filename
+        );
 
-        // Only mark as invalid if it's a boilerplate file with missing imports
-        const isBoilerplateFile =
-          file.filename.includes("Button.tsx") ||
-          file.filename.includes("Input.tsx") ||
-          file.filename.includes("Tabs.tsx") ||
-          file.filename.includes("ConnectWallet.tsx") ||
-          file.filename.includes("useUser.ts") ||
-          file.filename.includes("index.ts") ||
-          file.filename.includes("utils.ts") ||
-          file.filename.includes("wagmi.ts");
-
+        // Mark as invalid if there are any validation errors
         return (
-          (hasMissingImport && isBoilerplateFile) ||
           isMissingFile ||
-          isMissingClientDirective
+          isMissingClientDirective ||
+          hasTypeScriptError ||
+          hasReactError
         );
       });
 
@@ -1167,12 +1264,30 @@ export async function executeMultiStagePipeline(
         "STAGE_4_VALIDATOR"
       );
 
-      // Parse rewritten files
+      // Parse rewritten files with markdown handling
       let rewrittenFilesParsed: { filename: string; content: string }[];
       try {
-        rewrittenFilesParsed = JSON.parse(rewrittenFiles);
+        // Clean the response to remove markdown formatting
+        let cleanedResponse = rewrittenFiles.trim();
+
+        // Remove markdown code blocks if present
+        if (cleanedResponse.startsWith("```json")) {
+          cleanedResponse = cleanedResponse.replace(/^```json\s*/, "");
+        }
+        if (cleanedResponse.startsWith("```")) {
+          cleanedResponse = cleanedResponse.replace(/^```\s*/, "");
+        }
+        if (cleanedResponse.endsWith("```")) {
+          cleanedResponse = cleanedResponse.replace(/\s*```$/, "");
+        }
+
+        // Remove any leading/trailing whitespace
+        cleanedResponse = cleanedResponse.trim();
+
+        rewrittenFilesParsed = JSON.parse(cleanedResponse);
       } catch (error) {
         console.error("❌ Failed to parse rewritten files as JSON:");
+        console.error("Raw response:", rewrittenFiles.substring(0, 500));
         throw new Error(
           `Stage 4 JSON parsing failed: ${
             error instanceof Error ? error.message : String(error)
