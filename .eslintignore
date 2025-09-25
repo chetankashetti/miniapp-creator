@@ -1,0 +1,4 @@
+# Ignore generated files
+/generated
+/node_modules
+/.next

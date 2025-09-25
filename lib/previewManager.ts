@@ -5,7 +5,7 @@ import path from "path";
 const activePreviews = new Map<string, PreviewResponse>();
 
 // Preview API configuration
-const PREVIEW_API_BASE = process.env.PREVIEW_API_BASE;
+const PREVIEW_API_BASE = process.env.PREVIEW_API_BASE || 'https://minidev.fun';
 
 export interface PreviewResponse {
   url: string;
@@ -64,12 +64,12 @@ export async function createPreview(
     // Map the API response to our PreviewResponse format
     const previewData: PreviewResponse = {
       url:
-        `https://${apiResponse.previewUrl}` ||
+        `http://${apiResponse.previewUrl}` ||
         `https://${projectId}.minidev.fun`,
       status: apiResponse.isNewDeployment ? "deployed" : "updated",
       port: 3000, // Default port for Next.js apps
       previewUrl: apiResponse.previewUrl
-        ? `https://${apiResponse.previewUrl}`
+        ? `http://${apiResponse.previewUrl}`
         : "",
       vercelUrl: apiResponse.vercelUrl,
       aliasSuccess: apiResponse.aliasSuccess,
@@ -104,21 +104,23 @@ export async function updatePreviewFiles(
   );
 
   try {
-    // Convert files array to object format expected by the API
-    const filesObject: { [key: string]: string } = {};
-    changedFiles.forEach((file) => {
-      filesObject[file.filename] = file.content;
-    });
-    // Make API request to update preview (uses POST with same endpoint)
-    const response = await fetch(`${PREVIEW_API_BASE}/deploy`, {
+    // Convert files array to the format expected by the /previews endpoint
+    const filesArray = changedFiles.map(file => ({
+      path: file.filename,
+      content: file.content
+    }));
+
+    // Make API request to update preview using the /previews endpoint
+    const response = await fetch(`${PREVIEW_API_BASE}/previews`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        hash: projectId,
-        files: filesObject,
+        id: projectId,
+        files: filesArray,
+        wait: false, // Don't wait for readiness on updates
       }),
     });
 

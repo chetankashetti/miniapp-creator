@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { CodeEditor } from './CodeEditor';
 import { Preview } from './Preview';
 import { DevelopmentLogs } from './DevelopmentLogs';
@@ -18,11 +18,23 @@ interface GeneratedProject {
     hasPackageChanges?: boolean;
 }
 
+interface Project {
+  id: string;
+  name: string;
+  description?: string;
+  previewUrl?: string;
+  vercelUrl?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 interface CodeEditorAndPreviewProps {
     currentProject: GeneratedProject | null;
     isGenerating?: boolean;
     onFileChange?: (filePath: string, content: string) => void;
     onSaveFile?: (filePath: string, content: string) => Promise<boolean>;
+    onProjectSelect?: (project: Project) => void;
+    onNewProject?: () => void;
 }
 
 type ViewMode = 'code' | 'preview';
@@ -31,11 +43,22 @@ export function CodeEditorAndPreview({
     currentProject,
     isGenerating = false,
     onFileChange,
-    onSaveFile
+    onSaveFile,
+    onProjectSelect,
+    onNewProject
 }: CodeEditorAndPreviewProps) {
-    const [viewMode, setViewMode] = useState<ViewMode>('code');
+    const [viewMode, setViewMode] = useState<ViewMode>(currentProject ? 'code' : 'preview');
     const [showLogs, setShowLogs] = useState(false);
     const [showPublishModal, setShowPublishModal] = useState(false);
+
+    // Update view mode when currentProject changes
+    useEffect(() => {
+        if (currentProject) {
+            setViewMode('code'); // Show code editor when project is loaded
+        } else {
+            setViewMode('preview'); // Show project list when no project
+        }
+    }, [currentProject]);
 
     const getViewModeIcon = (mode: ViewMode) => {
         switch (mode) {
@@ -77,18 +100,6 @@ export function CodeEditorAndPreview({
         );
     }
 
-    if (!currentProject) {
-        return (
-            <div className="h-full flex flex-col rounded-lg">
-                <div className="flex-1 flex items-center justify-center">
-                    <div className="text-black-60 text-sm text-center">
-                        Project files and preview will appear here after generation.
-                    </div>
-                </div>
-            </div>
-        );
-    }
-
     return (
         <div className="h-full flex flex-col overflow-hidden">
             {/* Header with toggle icons and project URL */}
@@ -109,6 +120,20 @@ export function CodeEditorAndPreview({
                         </button>
                     ))}
                 </div>
+
+                {/* Back to Projects button - only show when project is open */}
+                {currentProject && onNewProject && (
+                    <button
+                        onClick={onNewProject}
+                        className="px-3 py-2 bg-gray-100 text-black rounded hover:bg-gray-200 transition-colors text-sm font-medium flex items-center gap-2"
+                        title="Back to Projects"
+                    >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
+                        </svg>
+                        Back to Projects
+                    </button>
+                )}
 
                 {/* Right side - Project URL controls */}
                 {currentProject && (
@@ -163,7 +188,11 @@ export function CodeEditorAndPreview({
 
                 {/* Always render Preview but hide when not in preview mode */}
                 <div className={`h-full ${viewMode === 'preview' ? 'block' : 'hidden'}`}>
-                    <Preview currentProject={currentProject} />
+                    <Preview 
+                        currentProject={currentProject} 
+                        onProjectSelect={onProjectSelect}
+                        onNewProject={onNewProject}
+                    />
                 </div>
             </div>
 

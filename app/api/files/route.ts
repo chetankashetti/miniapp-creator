@@ -8,6 +8,7 @@ import {
   updateGeneratedFile,
   deleteGeneratedFile,
 } from "../../../lib/previewManager";
+import { getProjectFiles } from "../../../lib/database";
 import { headers } from "next/headers";
 
 // GET: List files or fetch file content from generated directory
@@ -36,11 +37,22 @@ export async function GET(request: NextRequest) {
         `📋 Listing files from generated directory for project: ${projectId}`
       );
       try {
-        const files = await listGeneratedFiles(projectId);
+        let files = await listGeneratedFiles(projectId);
         console.log(
           `📁 Found ${files.length} files in generated directory:`,
           files
         );
+
+        // If no files found in generated directory, try database
+        if (files.length === 0) {
+          console.log(`📋 No files in generated directory, checking database...`);
+          const dbFiles = await getProjectFiles(projectId);
+          files = dbFiles.map(f => f.filename);
+          console.log(
+            `📁 Found ${files.length} files in database:`,
+            files
+          );
+        }
 
         // Ensure we always return a valid JSON response
         const response = {
@@ -74,16 +86,27 @@ export async function GET(request: NextRequest) {
     console.log(`🔍 Fetching file from generated directory: ${filePath}`);
 
     try {
-      const content = await getGeneratedFile(projectId, filePath);
+      let content = await getGeneratedFile(projectId, filePath);
 
       if (!content) {
-        console.log(`❌ File not found in generated directory: ${filePath}`);
-        return NextResponse.json({ error: "File not found" }, { status: 404 });
+        console.log(`❌ File not found in generated directory: ${filePath}, checking database...`);
+        // Try to get from database
+        const dbFiles = await getProjectFiles(projectId);
+        const dbFile = dbFiles.find(f => f.filename === filePath);
+        if (dbFile) {
+          content = dbFile.content;
+          console.log(
+            `✅ Found file in database: ${filePath} (${content.length} chars)`
+          );
+        } else {
+          console.log(`❌ File not found in database either: ${filePath}`);
+          return NextResponse.json({ error: "File not found" }, { status: 404 });
+        }
+      } else {
+        console.log(
+          `✅ Found file in generated directory: ${filePath} (${content.length} chars)`
+        );
       }
-
-      console.log(
-        `✅ Found file in generated directory: ${filePath} (${content.length} chars)`
-      );
 
       // Determine content type based on file extension
       const ext = path.extname(filePath);

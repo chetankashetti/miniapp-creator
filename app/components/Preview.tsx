@@ -1,4 +1,7 @@
 'use client';
+
+import { ProjectList } from './ProjectList';
+
 interface GeneratedProject {
     projectId: string;
     port: number;
@@ -11,21 +14,30 @@ interface GeneratedProject {
     hasPackageChanges?: boolean;
 }
 
-interface PreviewProps {
-    currentProject: GeneratedProject | null;
+interface Project {
+  id: string;
+  name: string;
+  description?: string;
+  previewUrl?: string;
+  vercelUrl?: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
-export function Preview({ currentProject }: PreviewProps) {
+interface PreviewProps {
+    currentProject: GeneratedProject | null;
+    onProjectSelect?: (project: Project) => void;
+    onNewProject?: () => void;
+}
+
+export function Preview({ currentProject, onProjectSelect, onNewProject }: PreviewProps) {
 
     if (!currentProject) {
         return (
-            <div className="h-full flex flex-col bg-white rounded-lg">
-                <div className="flex-1 flex items-center justify-center">
-                    <div className="text-black-60 text-sm text-center">
-                        Preview will appear here after generation.
-                    </div>
-                </div>
-            </div>
+            <ProjectList 
+                onProjectSelect={onProjectSelect || (() => {})}
+                onNewProject={onNewProject || (() => {})}
+            />
         );
     }
 

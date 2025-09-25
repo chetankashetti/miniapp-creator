@@ -4,6 +4,8 @@ import path from "path";
 import { v4 as uuidv4 } from "uuid";
 import { exec } from "child_process";
 import { promisify } from "util";
+import { createProject, saveProjectFiles } from "../../../lib/database";
+import { authenticateRequest } from "../../../lib/auth";
 
 const execAsync = promisify(exec);
 import {
@@ -14,14 +16,14 @@ import {
 } from "../../../lib/previewManager";
 
 // Import the API base URL
-const PREVIEW_API_BASE = "minidev.fun";
+const PREVIEW_API_BASE = process.env.PREVIEW_API_BASE || 'https://minidev.fun';
 import {
   // getOptimizedSystemPrompt,
   // createOptimizedUserPrompt,
-  executeMultiStagePipeline,
   STAGE_MODEL_CONFIG,
   ANTHROPIC_MODELS,
 } from "../../../lib/llmOptimizer";
+import { executeEnhancedPipeline } from "../../../lib/enhancedPipeline";
 import { headers } from "next/headers";
 
 // Utility: Recursively read all files in a directory, excluding node_modules, .next, and other build artifacts
@@ -45,6 +47,7 @@ async function readAllFiles(
       entry.name === "bun.lockb" ||
       entry.name === "pnpm-workspace.yaml" ||
       entry.name === "pnpm-workspace.yaml" ||
+      entry.name === ".DS_Store" || // Exclude macOS system files
       entry.name.startsWith(".")
     ) {
       continue;
@@ -54,8 +57,27 @@ async function readAllFiles(
     if (entry.isDirectory()) {
       files.push(...(await readAllFiles(fullPath, relPath)));
     } else {
-      const content = await fs.readFile(fullPath, "utf8");
-      files.push({ filename: relPath, content });
+      try {
+        // Try to read as text first
+        const content = await fs.readFile(fullPath, "utf8");
+        
+        // Check for null bytes and other binary content
+        if (content.includes('\0') || content.includes('\x00')) {
+          console.log(`⚠️ Skipping binary file: ${relPath}`);
+          continue;
+        }
+        
+        // Sanitize content for database storage
+        const sanitizedContent = content
+          .replace(/\0/g, '') // Remove null bytes
+          .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, ''); // Remove other control characters
+        
+        files.push({ filename: relPath, content: sanitizedContent });
+      } catch (error) {
+        // If reading as UTF-8 fails, it's likely a binary file
+        console.log(`⚠️ Skipping binary file: ${relPath} (${error})`);
+        continue;
+      }
     }
   }
   return files;
@@ -279,6 +301,14 @@ function estimateCost(
 
 export async function POST(request: NextRequest) {
   try {
+    const { user, isAuthorized, error } = await authenticateRequest(request);
+    if (!isAuthorized || !user) {
+      return NextResponse.json(
+        { error: error || "Authentication required" },
+        { status: 401 }
+      );
+    }
+
     const { prompt, useMultiStage = true } = await request.json();
     const accessToken = (await headers())
       .get("authorization")
@@ -399,11 +429,23 @@ export async function POST(request: NextRequest) {
       );
     };
 
-    const generatedFiles = await executeMultiStagePipeline(
+    // Use enhanced pipeline with context gathering and diff-based patching
+    const enhancedResult = await executeEnhancedPipeline(
       prompt,
       boilerplateFiles,
+      projectId,
+      accessToken,
       callLLM
     );
+
+    if (!enhancedResult.success) {
+      throw new Error(enhancedResult.error || "Enhanced pipeline failed");
+    }
+
+    const generatedFiles = enhancedResult.files.map(f => ({
+      filename: f.filename,
+      content: f.content
+    }));
 
     // Check if the pipeline returned boilerplate files as-is (no changes needed)
     let pipelineResult: { needsChanges: boolean; reason?: string } = {
@@ -496,6 +538,41 @@ export async function POST(request: NextRequest) {
       getPreviewUrl(projectId) || `https://${projectId}.${PREVIEW_API_BASE}`;
     console.log(`🎉 Project ready at: ${projectUrl}`);
 
+    // Save project to database
+    try {
+      console.log("💾 Saving project to database...");
+      
+      const project = await createProject(
+        user.id, // Use actual user ID from authentication
+        `Generated Project ${projectId.substring(0, 8)}`,
+        `AI-generated project: ${userRequest.substring(0, 100)}...`,
+        projectUrl,
+        projectId // Pass the custom project ID
+      );
+      
+      // Save ALL project files to database (boilerplate + generated)
+      const allFiles = await readAllFiles(userDir);
+      console.log(`📁 Found ${allFiles.length} files to save to database`);
+      
+      // Filter out any files that might cause encoding issues
+      const safeFiles = allFiles.filter(file => {
+        // Check for potential encoding issues
+        if (file.content.includes('\0') || file.content.includes('\x00')) {
+          console.log(`⚠️ Skipping file with null bytes: ${file.filename}`);
+          return false;
+        }
+        return true;
+      });
+      
+      console.log(`📁 Saving ${safeFiles.length} safe files to database`);
+      await saveProjectFiles(project.id, safeFiles);
+      
+      console.log("✅ Project saved to database successfully");
+    } catch (dbError) {
+      console.error("⚠️ Failed to save project to database:", dbError);
+      // Don't fail the request if database save fails
+    }
+
     return NextResponse.json({
       projectId,
       url: projectUrl,
@@ -521,6 +598,14 @@ export async function POST(request: NextRequest) {
 
 export async function PATCH(request: NextRequest) {
   try {
+    const { user, isAuthorized, error } = await authenticateRequest(request);
+    if (!isAuthorized || !user) {
+      return NextResponse.json(
+        { error: error || "Authentication required" },
+        { status: 401 }
+      );
+    }
+
     const { projectId, prompt, stream = false } = await request.json();
     const accessToken = (await headers())
       .get("authorization")
@@ -583,7 +668,7 @@ export async function PATCH(request: NextRequest) {
           "content-type": "application/json",
         },
         body: JSON.stringify({
-          model: "claude-3-5-sonnet-20241022",
+          model: "claude-3-7-sonnet-20250219",
           max_tokens: 2000,
           temperature: 0.7,
           system: systemPrompt,
@@ -618,16 +703,26 @@ export async function PATCH(request: NextRequest) {
         );
       };
 
-      // Use the multi-stage pipeline to generate changes
-      // Pass the full comprehensive prompt to get better context
+      // Use the enhanced pipeline with context gathering and diff-based patching
       console.log(
-        "🔄 Starting multi-stage pipeline with confirmed project requirements..."
+        "🔄 Starting enhanced pipeline with context gathering..."
       );
-      const generatedFiles = await executeMultiStagePipeline(
-        prompt, // Use full prompt with AI analysis for better context
+      const enhancedResult = await executeEnhancedPipeline(
+        prompt,
         boilerplateFiles,
+        projectId,
+        accessToken,
         callLLM
       );
+
+      if (!enhancedResult.success) {
+        throw new Error(enhancedResult.error || "Enhanced pipeline failed");
+      }
+
+      const generatedFiles = enhancedResult.files.map(f => ({
+        filename: f.filename,
+        content: f.content
+      }));
 
       // Write changes to generated directory
       await writeFilesToDir(userDir, generatedFiles);
@@ -636,6 +731,31 @@ export async function PATCH(request: NextRequest) {
       console.log("Updating files in preview...");
       await updatePreviewFiles(projectId, generatedFiles, accessToken);
       console.log("Preview files updated successfully");
+
+      // Update project files in database
+      try {
+        console.log("💾 Updating project files in database...");
+        // Read all files from the updated directory and save them
+        const allFiles = await readAllFiles(userDir);
+        console.log(`📁 Found ${allFiles.length} files to save to database`);
+        
+        // Filter out any files that might cause encoding issues
+        const safeFiles = allFiles.filter(file => {
+          // Check for potential encoding issues
+          if (file.content.includes('\0') || file.content.includes('\x00')) {
+            console.log(`⚠️ Skipping file with null bytes: ${file.filename}`);
+            return false;
+          }
+          return true;
+        });
+        
+        console.log(`📁 Saving ${safeFiles.length} safe files to database`);
+        await saveProjectFiles(projectId, safeFiles);
+        console.log("✅ Project files updated in database successfully");
+      } catch (dbError) {
+        console.error("⚠️ Failed to update project files in database:", dbError);
+        // Don't fail the request if database update fails
+      }
 
       // Handle package.json changes (just log for now since we're not managing dependencies in preview)
       const packageJsonChanged = generatedFiles.some(

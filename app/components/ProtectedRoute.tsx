@@ -1,11 +1,11 @@
 'use client';
-import { usePrivy } from '@privy-io/react-auth';
+import { useAuthContext } from '../contexts/AuthContext';
 import { EmailLogin } from './EmailLogin';
 
 export default function ProtectedRoute({ children }: { children: React.ReactNode }) {
-    const { ready, authenticated } = usePrivy();
+    const { isAuthenticated, isLoading } = useAuthContext();
 
-    if (!ready) return (
+    if (isLoading) return (
         <div className="min-h-screen relative flex items-center justify-center p-6 overflow-hidden">
             {/* Background with grid pattern inspired by home page */}
             <div className="absolute inset-0 bg-[#0A0B1A]"></div>
@@ -15,7 +15,7 @@ export default function ProtectedRoute({ children }: { children: React.ReactNode
         </div>
     );
 
-    if (!authenticated) {
+    if (!isAuthenticated) {
         return (
             <EmailLogin />
         );

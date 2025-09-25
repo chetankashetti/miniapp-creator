@@ -1,8 +1,8 @@
 'use client';
 
-
 import { CodeEditorAndPreview } from './CodeEditorAndPreview';
 import { Icons } from './sections/icons';
+import { useAuthContext } from '../contexts/AuthContext';
 
 interface GeneratedProject {
   projectId: string;
@@ -16,12 +16,25 @@ interface GeneratedProject {
   hasPackageChanges?: boolean;
 }
 
+interface Project {
+  id: string;
+  name: string;
+  description?: string;
+  previewUrl?: string;
+  vercelUrl?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 interface CodeGeneratorProps {
   currentProject: GeneratedProject | null;
   isGenerating?: boolean;
+  onProjectSelect?: (project: Project) => void;
+  onNewProject?: () => void;
 }
 
-export function CodeGenerator({ currentProject, isGenerating = false }: CodeGeneratorProps) {
+export function CodeGenerator({ currentProject, isGenerating = false, onProjectSelect, onNewProject }: CodeGeneratorProps) {
+  const { sessionToken } = useAuthContext();
 
   return (
     <div className="h-full flex-1 w-full flex flex-col px-[20px] pb-[20px]">
@@ -32,15 +45,17 @@ export function CodeGenerator({ currentProject, isGenerating = false }: CodeGene
       <CodeEditorAndPreview
         currentProject={currentProject}
         isGenerating={isGenerating}
+        onProjectSelect={onProjectSelect}
+        onNewProject={onNewProject}
         onFileChange={(filePath, content) => {
           console.log('File changed:', filePath, content.substring(0, 100));
         }}
         onSaveFile={async (filePath, content) => {
-          if (!currentProject) return false;
+          if (!currentProject || !sessionToken) return false;
           try {
             const response = await fetch('/api/files', {
               method: 'PUT',
-              headers: { 'Content-Type': 'application/json' },
+              headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${sessionToken}` },
               body: JSON.stringify({ projectId: currentProject.projectId, filename: filePath, content }),
             });
             return response.ok;

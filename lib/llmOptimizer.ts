@@ -5,7 +5,7 @@ export const ANTHROPIC_MODELS = {
   // Fast, cost-effective for simple tasks
   FAST: "claude-3-5-haiku-20241022",
   // Balanced performance for most tasks
-  BALANCED: "claude-3-5-sonnet-20241022",
+  BALANCED: "claude-3-7-sonnet-20250219",
   // High performance for complex tasks
   // POWERFUL: "claude-3-7-sonnet-20250219",
   POWERFUL: "claude-sonnet-4-20250514",
@@ -13,6 +13,13 @@ export const ANTHROPIC_MODELS = {
 
 // Model selection strategy for each stage with fallbacks
 export const STAGE_MODEL_CONFIG = {
+  STAGE_0_CONTEXT_GATHERER: {
+    model: ANTHROPIC_MODELS.FAST,
+    fallbackModel: ANTHROPIC_MODELS.BALANCED,
+    maxTokens: 2000,
+    temperature: 0,
+    reason: "Context gathering needs to be fast and efficient",
+  },
   STAGE_1_INTENT_PARSER: {
     model: ANTHROPIC_MODELS.FAST,
     fallbackModel: ANTHROPIC_MODELS.BALANCED, // Use Sonnet if Haiku is overloaded
@@ -140,6 +147,87 @@ const FARCASTER_BOILERPLATE_CONTEXT = {
     },
   },
 };
+
+// Stage 0: Context Gatherer Types and Prompts
+//
+// PURPOSE: Stage 0 determines if additional context is needed before processing the user request.
+// It can request tool calls to explore the codebase and gather information.
+//
+// KEY PRINCIPLE: GATHER CONTEXT FIRST - UNDERSTAND THE CODEBASE BEFORE MAKING CHANGES
+//
+export interface ContextGatheringResult {
+  needsContext: boolean;
+  toolCalls: Array<{
+    tool: string;
+    args: string[];
+    workingDirectory?: string;
+    reason: string;
+  }>;
+  contextSummary?: string;
+}
+
+export function getStage0ContextGathererPrompt(
+  userPrompt: string,
+  currentFiles: { filename: string; content: string }[]
+): string {
+  return `
+ROLE: Context Gatherer for Farcaster Miniapp
+
+TASK: Analyze if additional context is needed before processing the user request. If the request is vague or requires understanding existing code structure, request tool calls to gather context.
+
+USER REQUEST: ${userPrompt}
+
+CURRENT FILES AVAILABLE:
+${currentFiles.map(f => `- ${f.filename}`).join('\n')}
+
+AVAILABLE TOOLS:
+- grep: Search for patterns in files
+- find: Find files by name or type
+- tree: Show directory structure
+- cat: Read file contents
+- head/tail: Show first/last lines of files
+- wc: Count lines, words, characters
+- ls: List directory contents
+
+CRITICAL: You MUST return ONLY valid JSON. No explanations, no text, no markdown, no code fences.
+
+OUTPUT FORMAT (JSON ONLY):
+{
+  "needsContext": boolean,
+  "toolCalls": [
+    {
+      "tool": "grep",
+      "args": ["pattern", "file_path"],
+      "workingDirectory": "src",
+      "reason": "Need to find all instances of useState hook usage"
+    }
+  ],
+  "contextSummary": "Brief summary of what context is being gathered"
+}
+
+DECISION RULES:
+- If user request is specific and clear (e.g., "Add a button to Tab1"), set needsContext: false
+- If user request is vague (e.g., "Fix the bug", "Improve the UI"), set needsContext: true
+- If user mentions specific files/functions but they're not in current files, set needsContext: true
+- If user wants to modify existing functionality, set needsContext: true
+- Always provide clear reason for each tool call
+- Limit to 3 tool calls maximum
+- Use workingDirectory to scope searches appropriately
+
+EXAMPLES:
+
+User: "Add a token airdrop feature"
+Output: {"needsContext": true, "toolCalls": [{"tool": "grep", "args": ["useAccount|useUser", "src"], "workingDirectory": "src", "reason": "Need to understand current wallet integration"}], "contextSummary": "Understanding wallet integration for token airdrop"}
+
+User: "Change the button color in Tab1 to blue"
+Output: {"needsContext": false, "toolCalls": [], "contextSummary": "Specific UI change, no additional context needed"}
+
+User: "Fix the bug in the voting system"
+Output: {"needsContext": true, "toolCalls": [{"tool": "grep", "args": ["voting|vote|poll", "src"], "workingDirectory": "src", "reason": "Need to find voting-related code to understand the bug"}], "contextSummary": "Finding voting system code to identify the bug"}
+
+REMEMBER: Return ONLY the JSON object above. No other text, no explanations, no markdown formatting.
+`;
+}
 
 // Stage 1: Intent Parser Types and Prompts
 export interface IntentSpec {
@@ -872,6 +960,59 @@ export async function executeMultiStagePipeline(
     console.log("🚀 Starting multi-stage pipeline...");
     console.log("📝 User Prompt:", userPrompt);
     console.log("📁 Current Files Count:", currentFiles.length);
+
+    // Stage 0: Context Gatherer
+    console.log("\n" + "=".repeat(50));
+    console.log("🔍 STAGE 0: Context Gatherer");
+    console.log("=".repeat(50));
+
+    const contextPrompt = `USER REQUEST: ${userPrompt}`;
+    console.log("📤 Sending to LLM (Stage 0):");
+    console.log(
+      "System Prompt Length:",
+      getStage0ContextGathererPrompt(userPrompt, currentFiles).length,
+      "chars"
+    );
+    console.log("User Prompt:", contextPrompt);
+
+    const startTime0 = Date.now();
+    const contextResponse = await callLLM(
+      getStage0ContextGathererPrompt(userPrompt, currentFiles),
+      contextPrompt,
+      "Stage 0: Context Gatherer",
+      "STAGE_0_CONTEXT_GATHERER"
+    );
+    const endTime0 = Date.now();
+
+    console.log("📥 Received from LLM (Stage 0):");
+    console.log("Response Length:", contextResponse.length, "chars");
+    console.log("Response Time:", endTime0 - startTime0, "ms");
+    console.log("Raw Response:", contextResponse.substring(0, 500) + "...");
+
+    let contextResult: ContextGatheringResult;
+    try {
+      contextResult = JSON.parse(contextResponse);
+    } catch (error) {
+      console.error("❌ Failed to parse Stage 0 response as JSON:");
+      console.error("Raw response:", contextResponse);
+      throw new Error(
+        `Stage 0 JSON parsing failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+    }
+
+    console.log("🔍 Context Gathering Result:");
+    console.log("Needs Context:", contextResult.needsContext);
+    console.log("Tool Calls:", contextResult.toolCalls?.length || 0);
+    console.log("Context Summary:", contextResult.contextSummary);
+
+    // Execute tool calls if context is needed
+    if (contextResult.needsContext && contextResult.toolCalls?.length) {
+      console.log("🔧 Executing tool calls for context gathering...");
+      // Note: Tool execution will be handled by the calling function
+      // This is a placeholder for the enhanced context gathering
+    }
 
     // Stage 1: Intent Parser
     console.log("\n" + "=".repeat(50));

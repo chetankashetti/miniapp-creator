@@ -1,6 +1,14 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  // Exclude generated directories from build
+  webpack: (config) => {
+    config.watchOptions = {
+      ...config.watchOptions,
+      ignored: ['**/generated/**', '**/node_modules/**'],
+    };
+    return config;
+  },
   // async headers() {
   //   return [
   //     {

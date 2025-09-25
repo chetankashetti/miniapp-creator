@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import dynamic from 'next/dynamic';
+import { useAuthContext } from '../contexts/AuthContext';
 
 // Monaco Editor (dynamically loaded for SSR)
 const MonacoEditor = dynamic(() => import('@monaco-editor/react'), { ssr: false });
@@ -37,6 +38,10 @@ const IMPORTANT_FILES = [
     'src/lib/wagmi.ts',
     'src/types/index.ts',
     'package.json',
+    'tsconfig.json',
+    'next.config.ts',
+    'postcss.config.mjs',
+    'eslint.config.mjs',
     'public/.well-known/farcaster.json'
 ];
 
@@ -49,10 +54,12 @@ const EXCLUDED_FILES = [
 ];
 
 // Fetch file content from the API
-async function fetchFileContent(filePath: string, projectId?: string): Promise<string> {
-    if (projectId) {
+async function fetchFileContent(filePath: string, projectId?: string, sessionToken?: string): Promise<string> {
+    if (projectId && sessionToken) {
         try {
-            const response = await fetch(`/api/files?file=${encodeURIComponent(filePath)}&projectId=${projectId}`);
+            const response = await fetch(`/api/files?file=${encodeURIComponent(filePath)}&projectId=${projectId}`, {
+                headers: { 'Authorization': `Bearer ${sessionToken}` }
+            });
             if (response.ok) {
                 return await response.text();
             }
@@ -63,11 +70,57 @@ async function fetchFileContent(filePath: string, projectId?: string): Promise<s
     return '// File not found or error loading content';
 }
 
+// Fetch project files from database
+async function fetchProjectFilesFromDB(projectId: string, sessionToken?: string): Promise<string[]> {
+    if (!sessionToken) return [];
+    
+    try {
+        console.log(`🔍 Fetching project files from database for project: ${projectId}`);
+        const response = await fetch(`/api/projects/${projectId}`, {
+            headers: { 'Authorization': `Bearer ${sessionToken}` }
+        });
+
+        if (response.ok) {
+            const data = await response.json();
+            const files = data.project?.files || [];
+            return files.map((f: { filename: string }) => f.filename);
+        } else {
+            console.error(`❌ HTTP error: ${response.status} ${response.statusText}`);
+        }
+    } catch (error) {
+        console.error('❌ Network error fetching project files from database:', error);
+    }
+    return [];
+}
+
+// Fetch file content from database
+async function fetchFileContentFromDB(filePath: string, projectId: string, sessionToken: string): Promise<string> {
+    try {
+        const response = await fetch(`/api/projects/${projectId}`, {
+            headers: { 'Authorization': `Bearer ${sessionToken}` }
+        });
+
+        if (response.ok) {
+            const data = await response.json();
+            const files = data.project?.files || [];
+            const file = files.find((f: { filename: string; content: string }) => f.filename === filePath);
+            return file?.content || '// File not found';
+        }
+    } catch (error) {
+        console.warn(`Failed to fetch file ${filePath} from database:`, error);
+    }
+    return '// File not found or error loading content';
+}
+
 // Fetch list of available files from the project
-async function fetchProjectFiles(projectId: string): Promise<string[]> {
+async function fetchProjectFiles(projectId: string, sessionToken?: string): Promise<string[]> {
+    if (!sessionToken) return [];
+    
     try {
         console.log(`🔍 Fetching project files for project: ${projectId}`);
-        const response = await fetch(`/api/files?projectId=${projectId}&listFiles=true`);
+        const response = await fetch(`/api/files?projectId=${projectId}&listFiles=true`, {
+            headers: { 'Authorization': `Bearer ${sessionToken}` }
+        });
 
         if (response.ok) {
             const responseText = await response.text();
@@ -108,7 +161,16 @@ function createFileTree(files: string[]): FileNode[] {
     // Filter important files and create nodes
     const importantFiles = files.filter(file =>
         !EXCLUDED_FILES.some(excluded => file.includes(excluded)) &&
-        (IMPORTANT_FILES.includes(file) || file.startsWith('src/') || file.startsWith('public/'))
+        (IMPORTANT_FILES.includes(file) || 
+         file.startsWith('src/') || 
+         file.startsWith('public/') ||
+         file.endsWith('.json') ||
+         file.endsWith('.ts') ||
+         file.endsWith('.tsx') ||
+         file.endsWith('.js') ||
+         file.endsWith('.jsx') ||
+         file.endsWith('.css') ||
+         file.endsWith('.md'))
     );
 
     importantFiles.forEach(file => {
@@ -225,31 +287,49 @@ export function CodeEditor({ currentProject, onFileChange }: CodeEditorProps) {
     const [selectedFile, setSelectedFile] = useState<string>('');
     const [fileContent, setFileContent] = useState<string>('');
     const [fileTree, setFileTree] = useState<FileNode[]>([]);
+    const { sessionToken } = useAuthContext();
     // const [isSaving, setIsSaving] = useState(false);
     // const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
     // const [isCollapsed, setIsCollapsed] = useState(false);
 
     // Fetch project files when project is created
     useEffect(() => {
-        if (currentProject) {
-            fetchProjectFiles(currentProject.projectId).then(files => {
-                setFileTree(createFileTree(files));
-                // Set first available file as selected
+        if (currentProject && sessionToken) {
+            // Try database first, then fallback to file system
+            fetchProjectFilesFromDB(currentProject.projectId, sessionToken).then(files => {
                 if (files.length > 0) {
+                    setFileTree(createFileTree(files));
+                    // Set first available file as selected
                     const firstFile = files.find(f => f.includes('page.tsx')) || files[0];
                     setSelectedFile(firstFile);
+                } else {
+                    // Fallback to file system
+                    fetchProjectFiles(currentProject.projectId, sessionToken).then(files => {
+                        setFileTree(createFileTree(files));
+                        if (files.length > 0) {
+                            const firstFile = files.find(f => f.includes('page.tsx')) || files[0];
+                            setSelectedFile(firstFile);
+                        }
+                    });
                 }
             });
         }
-    }, [currentProject]);
+    }, [currentProject, sessionToken]);
 
     // Fetch file content when selected file changes
     useEffect(() => {
-        if (currentProject && selectedFile) {
-            fetchFileContent(selectedFile, currentProject.projectId).then(setFileContent);
-            // setHasUnsavedChanges(false);
+        if (currentProject && selectedFile && sessionToken) {
+            // Try database first, then fallback to file system
+            fetchFileContentFromDB(selectedFile, currentProject.projectId, sessionToken).then(content => {
+                if (content !== '// File not found or error loading content') {
+                    setFileContent(content);
+                } else {
+                    // Fallback to file system
+                    fetchFileContent(selectedFile, currentProject.projectId, sessionToken).then(setFileContent);
+                }
+            });
         }
-    }, [selectedFile, currentProject]);
+    }, [selectedFile, currentProject, sessionToken]);
 
     const handleFileChange = (newContent: string | undefined) => {
         if (newContent !== undefined && newContent !== fileContent) {

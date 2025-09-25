@@ -4,7 +4,7 @@ import { useState, useRef, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Icons } from './sections/icons';
-import { usePrivy } from '@privy-io/react-auth';
+import { useAuthContext } from '../contexts/AuthContext';
 
 interface GeneratedProject {
     projectId: string;
@@ -41,7 +41,7 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
     const [hasShownWarning, setHasShownWarning] = useState(false);
     const chatBottomRef = useRef<HTMLDivElement>(null);
     const chatContainerRef = useRef<HTMLDivElement>(null);
-    const { getAccessToken } = usePrivy();
+    const { sessionToken } = useAuthContext();
 
 
     // Chat session state
@@ -62,17 +62,47 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
         }
     }, [chatSessionId]);
 
-    // Add welcome message when chat is empty
+    // Load chat messages when project changes
     useEffect(() => {
-        if (chat.length === 0 && !aiLoading) {
-            setChat([{
-                role: 'ai',
-                content: `Minidev is your on-chain sidekick that transforms ideas into fully functional Farcaster Mini Apps — no coding required.`,
-                phase: 'requirements',
-                timestamp: Date.now()
-            }]);
-        }
-    }, [chat.length, aiLoading]);
+        const loadChatMessages = async () => {
+            if (currentProject?.projectId && sessionToken) {
+                try {
+                    // Use the main chat API to get messages for this project
+                    const response = await fetch(`/api/chat?projectId=${currentProject.projectId}`, {
+                        headers: { 'Authorization': `Bearer ${sessionToken}` }
+                    });
+                    if (response.ok) {
+                        const data = await response.json();
+                        if (data.messages && data.messages.length > 0) {
+                            const loadedMessages: ChatMessage[] = data.messages.map((msg: { role: string; content: string; phase?: string; timestamp: number; changedFiles?: string[] }) => ({
+                                role: msg.role,
+                                content: msg.content,
+                                phase: msg.phase,
+                                timestamp: msg.timestamp,
+                                changedFiles: msg.changedFiles
+                            }));
+                            setChat(loadedMessages);
+                            return;
+                        }
+                    }
+                } catch (error) {
+                    console.warn('Failed to load chat messages:', error);
+                }
+            }
+            
+            // Add welcome message when no project or no messages
+            if (chat.length === 0 && !aiLoading) {
+                setChat([{
+                    role: 'ai',
+                    content: `Minidev is your on-chain sidekick that transforms ideas into fully functional Farcaster Mini Apps — no coding required.`,
+                    phase: 'requirements',
+                    timestamp: Date.now()
+                }]);
+            }
+        };
+
+        loadChatMessages();
+    }, [currentProject?.projectId, sessionToken, aiLoading, chat.length]);
 
     // Show warning message once when user hasn't started chatting
     useEffect(() => {
@@ -92,8 +122,7 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
     }, [isGenerating, onGeneratingChange]);
 
     const handleSendMessage = async (userMessage: string) => {
-        if (!chatSessionId) return;
-        const accessToken = await getAccessToken();
+        if (!chatSessionId || !sessionToken) return;
         // setPrompt('');
         setAiLoading(true);
 
@@ -108,6 +137,8 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
         };
         setChat(prev => [...prev, userMsg]);
 
+        // User message will be saved to database by the chat API
+
         try {
             const endpoint = '/api/chat';
             const body: {
@@ -115,14 +146,12 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
                 message: string;
                 stream: boolean;
                 action?: string;
-            } | {
                 projectId?: string;
-                prompt: string;
-                stream: boolean;
             } = {
                 sessionId: chatSessionId,
                 message: userMessage,
-                stream: false
+                stream: false,
+                projectId: currentProject?.projectId
             };
 
             // Determine the appropriate action based on current phase
@@ -149,7 +178,7 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
                     // Directly call the multi-stage pipeline for updates
                     const updateResponse = await fetch('/api/generate', {
                         method: 'PATCH',
-                        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${accessToken}` },
+                        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${sessionToken}` },
                         body: JSON.stringify({
                             projectId: currentProject?.projectId,
                             prompt: userMessage,
@@ -192,7 +221,7 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
 
             const response = await fetch(endpoint, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${accessToken}` },
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${sessionToken}` },
                 body: JSON.stringify(body),
             });
 
@@ -213,6 +242,8 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
                 timestamp: Date.now()
             };
             setChat(prev => [...prev, aiMsg]);
+
+            // AI message will be saved to database by the chat API
 
             // Check if we should transition to building phase
             if (currentPhase === 'requirements') {
@@ -257,11 +288,10 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
     };
 
     const handleGenerateProject = async (generationPrompt: string) => {
-        if (!generationPrompt.trim()) {
+        if (!generationPrompt.trim() || !sessionToken) {
             // setError('Please enter a prompt');
             return;
         }
-        const accessToken = await getAccessToken();
         setIsGenerating(true);
         // setError(null);
         try {
@@ -271,7 +301,7 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
 
             const response = await fetch('/api/generate', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${accessToken}` },
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${sessionToken}` },
                 body: JSON.stringify({ prompt: generationPrompt }),
             });
             if (!response.ok) {
@@ -289,16 +319,33 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
                 ? `🎉 Your miniapp has been created! I've generated ${project.generatedFiles.length} files and your app is now running. You can preview it on the right and continue chatting with me to make changes.`
                 : '🎉 Your miniapp has been created! The preview should be available shortly. You can continue chatting with me to make changes.';
 
-            setChat(prev => [
-                ...prev,
-                {
-                    role: 'ai',
-                    content: aiMessage,
-                    changedFiles: project.generatedFiles || [],
-                    phase: 'editing',
-                    timestamp: Date.now()
+            const successMsg: ChatMessage = {
+                role: 'ai',
+                content: aiMessage,
+                changedFiles: project.generatedFiles || [],
+                phase: 'editing',
+                timestamp: Date.now()
+            };
+
+            setChat(prev => [...prev, successMsg]);
+
+            // Save success message to database
+            if (project.projectId) {
+                try {
+                    await fetch(`/api/projects/${project.projectId}/chat`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${sessionToken}` },
+                        body: JSON.stringify({
+                            role: 'ai',
+                            content: aiMessage,
+                            phase: 'editing',
+                            changedFiles: project.generatedFiles || []
+                        })
+                    });
+                } catch (error) {
+                    console.warn('Failed to save success message to database:', error);
                 }
-            ]);
+            }
         } catch (err) {
             const errorMessage = err instanceof Error ? err.message : 'An error occurred';
             console.error('Generation failed:', errorMessage);

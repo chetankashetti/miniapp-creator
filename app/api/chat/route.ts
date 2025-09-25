@@ -1,9 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
+import { saveChatMessage, createProject } from "../../../lib/database";
+import { authenticateRequest } from "../../../lib/auth";
+import { db, chatMessages } from "../../../db";
+import { eq } from "drizzle-orm";
 
 interface ChatMessage {
   role: "user" | "ai";
   content: string;
   timestamp: number;
+  phase?: string;
+  changedFiles?: string[];
 }
 
 interface ChatSession {
@@ -19,6 +25,55 @@ interface ChatSession {
 }
 
 const chatSessions = new Map<string, ChatSession>();
+const sessionToProjectMap = new Map<string, string>(); // Maps sessionId to projectId
+
+// Helper function to load chat messages from database and hydrate memory cache
+async function loadChatMessagesFromDB(projectId: string): Promise<ChatMessage[]> {
+  try {
+    const messages = await db.select().from(chatMessages)
+      .where(eq(chatMessages.projectId, projectId))
+      .orderBy(chatMessages.timestamp);
+    
+    return messages.map(msg => ({
+      role: msg.role as "user" | "ai",
+      content: msg.content,
+      timestamp: new Date(msg.timestamp).getTime(),
+      phase: msg.phase || undefined,
+      changedFiles: msg.changedFiles as string[] | undefined
+    }));
+  } catch (error) {
+    console.warn("Failed to load chat messages from DB:", error);
+    return [];
+  }
+}
+
+// Helper function to save message to DB and update memory cache
+async function saveMessageToDBAndCache(
+  projectId: string, 
+  role: "user" | "ai", 
+  content: string, 
+  phase?: string, 
+  changedFiles?: string[]
+): Promise<void> {
+  try {
+    // Save to database
+    await saveChatMessage(projectId, role, content, phase, changedFiles);
+    
+    // Update memory cache
+    const session = chatSessions.get(projectId);
+    if (session) {
+      session.messages.push({
+        role,
+        content,
+        timestamp: Date.now(),
+        phase,
+        changedFiles
+      });
+    }
+  } catch (error) {
+    console.warn("Failed to save message to DB and cache:", error);
+  }
+}
 
 const REQUIREMENTS_GATHERING_PROMPT = `You are an expert Farcaster Miniapp developer and requirements analyst.
 
@@ -83,7 +138,19 @@ async function callClaude(
   stream: boolean = false
 ): Promise<string | ReadableStream> {
   const apiKey = process.env.CLAUDE_API_KEY;
+  console.log("Claude API key:", apiKey);
   if (!apiKey) throw new Error("Claude API key not set");
+
+  const requestBody = {
+    model: "claude-sonnet-4-20250514",
+    max_tokens: 4000,
+    temperature: 0.2,
+    system: systemPrompt,
+    messages: [{ role: "user", content: userMessage }],
+    stream: stream,
+  };
+
+  console.log("Claude API request body:", JSON.stringify(requestBody, null, 2));
 
   const response = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
@@ -92,17 +159,17 @@ async function callClaude(
       "anthropic-version": "2023-06-01",
       "content-type": "application/json",
     },
-    body: JSON.stringify({
-      model: "claude-3-5-sonnet-20241022",
-      max_tokens: 4000,
-      temperature: 0.2,
-      system: systemPrompt,
-      messages: [{ role: "user", content: userMessage }],
-      stream: stream,
-    }),
+    body: JSON.stringify(requestBody),
   });
 
-  if (!response.ok) throw new Error(`Claude API error: ${response.status}`);
+  console.log("Claude API response status:", response.status);
+  console.log("Claude API response headers:", Object.fromEntries(response.headers.entries()));
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    console.log("Claude API error response:", errorText);
+    throw new Error(`Claude API error: ${response.status} - ${errorText}`);
+  }
 
   if (stream) {
     return response.body as ReadableStream;
@@ -114,7 +181,7 @@ async function callClaude(
 
 export async function POST(request: NextRequest) {
   try {
-    const { sessionId, message, action, stream = false } = await request.json();
+    const { sessionId, message, action, stream = false, projectId } = await request.json();
 
     if (!sessionId || !message) {
       return NextResponse.json(
@@ -123,21 +190,67 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    let session = chatSessions.get(sessionId);
-    if (!session) {
-      session = {
-        sessionId,
-        messages: [],
-        projectConfirmed: false,
-      };
-      chatSessions.set(sessionId, session);
+    // Authenticate the user to get their ID
+    const { user, isAuthorized, error } = await authenticateRequest(request);
+    if (!isAuthorized || !user) {
+      return NextResponse.json(
+        { error: error || "Authentication required" },
+        { status: 401 }
+      );
     }
 
-    session.messages.push({
-      role: "user",
-      content: message,
-      timestamp: Date.now(),
-    });
+    // Determine the project ID to use
+    let currentProjectId = projectId;
+    
+    // If no projectId provided, we need to create one for this chat session
+    if (!currentProjectId) {
+      // Check if this session already has a project mapped
+      currentProjectId = sessionToProjectMap.get(sessionId);
+      
+      // If still no project, create one
+      if (!currentProjectId) {
+        try {
+          const draftProject = await createProject(
+            user.id,
+            `Chat Project ${sessionId.substring(0, 8)}`,
+            "Chat conversation project",
+            undefined
+          );
+          currentProjectId = draftProject.id;
+          sessionToProjectMap.set(sessionId, currentProjectId);
+          console.log(`Created project ${currentProjectId} for session ${sessionId}`);
+        } catch (error) {
+          console.warn("Failed to create project:", error);
+          return NextResponse.json(
+            { error: "Failed to create project for chat" },
+            { status: 500 }
+          );
+        }
+      }
+    }
+
+    // Get or create chat session (using projectId as key for proper mapping)
+    let session = chatSessions.get(currentProjectId);
+    if (!session) {
+      // Load existing messages from database
+      const existingMessages = await loadChatMessagesFromDB(currentProjectId);
+      
+      session = {
+        sessionId,
+        messages: existingMessages,
+        projectConfirmed: false,
+      };
+      chatSessions.set(currentProjectId, session);
+      console.log(`Loaded ${existingMessages.length} messages from DB for project ${currentProjectId}`);
+    }
+
+    // Save user message to database and update cache
+    await saveMessageToDBAndCache(
+      currentProjectId, 
+      "user", 
+      message, 
+      action === "confirm_project" ? "building" : "requirements"
+    );
 
     if (stream) {
       // Handle streaming response
@@ -205,16 +318,19 @@ export async function POST(request: NextRequest) {
         aiResponse = (await callClaude(systemPrompt, message)) as string;
       }
 
-      session.messages.push({
-        role: "ai",
-        content: aiResponse,
-        timestamp: Date.now(),
-      });
+      // Save AI message to database and update cache
+      await saveMessageToDBAndCache(
+        currentProjectId, 
+        "ai", 
+        aiResponse, 
+        action === "confirm_project" ? "building" : "requirements"
+      );
 
       return NextResponse.json({
         success: true,
         response: aiResponse,
         sessionId,
+        projectId: currentProjectId,
         projectConfirmed: session.projectConfirmed,
         messageCount: session.messages.length,
       });
@@ -234,31 +350,31 @@ export async function POST(request: NextRequest) {
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
-    const sessionId = searchParams.get("sessionId");
+    const projectId = searchParams.get("projectId");
 
-    if (!sessionId) {
-      return NextResponse.json({ error: "Missing sessionId" }, { status: 400 });
+    if (!projectId) {
+      return NextResponse.json({ error: "Missing projectId" }, { status: 400 });
     }
 
-    const session = chatSessions.get(sessionId);
-    if (!session) {
-      return NextResponse.json({ error: "Session not found" }, { status: 404 });
+    // Load messages from database
+    const messages = await loadChatMessagesFromDB(projectId);
+    
+    // Update memory cache
+    const session = chatSessions.get(projectId);
+    if (session) {
+      session.messages = messages;
     }
 
     return NextResponse.json({
       success: true,
-      session: {
-        sessionId: session.sessionId,
-        messages: session.messages,
-        projectConfirmed: session.projectConfirmed,
-        finalRequirements: session.finalRequirements,
-      },
+      messages,
+      projectId,
     });
   } catch (error) {
-    console.error("Chat session retrieval error:", error);
+    console.error("Chat messages retrieval error:", error);
     return NextResponse.json(
       {
-        error: "Failed to retrieve chat session",
+        error: "Failed to retrieve chat messages",
         details: error instanceof Error ? error.message : String(error),
       },
       { status: 500 }
