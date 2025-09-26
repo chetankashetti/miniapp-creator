@@ -45,7 +45,8 @@ export async function executeEnhancedPipeline(
     const generatedFiles = await executeMultiStagePipeline(
       userPrompt,
       contextResult.enhancedFiles,
-      callLLM
+      callLLM,
+      projectId
     );
 
     // Step 3: Generate diffs for each file
@@ -124,7 +125,8 @@ export function applyDiffsToFiles(
       const originalFile = originalFiles.find(f => f.filename === fileWithDiff.filename);
       if (originalFile) {
         try {
-          const newContent = applyDiffToContent(originalFile.content, fileWithDiff.diff.hunks);
+          const hunksAsString = JSON.stringify(fileWithDiff.diff.hunks);
+          const newContent = applyDiffToContent(originalFile.content, hunksAsString);
           result.push({
             filename: fileWithDiff.filename,
             content: newContent

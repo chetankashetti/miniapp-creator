@@ -68,8 +68,9 @@ export function useAuth() {
         return;
       }
 
-      // If we already have a valid session, don't re-authenticate
-      if (authState.isAuthenticated && authState.sessionToken) {
+      // If we already have a valid session and it's the same user, don't re-authenticate
+      if (authState.isAuthenticated && authState.sessionToken && authState.user?.privyUserId === privyUser.id) {
+        console.log('✅ Already authenticated with valid session, skipping re-authentication');
         hasInitialized.current = true;
         return;
       }
@@ -80,16 +81,8 @@ export function useAuth() {
         return;
       }
 
-      // If already initialized, don't re-authenticate
-      if (hasInitialized.current) {
-        return;
-      }
-
       // Create a new initialization promise
       initializationPromise.current = (async () => {
-        // setIsInitializing(true);
-        hasInitialized.current = true;
-
       try {
         // Get Privy access token
         const accessToken = await getAccessToken();
@@ -119,7 +112,8 @@ export function useAuth() {
           });
           hasInitialized.current = true;
         } else {
-          console.error('Failed to create user session:', await response.text());
+          const errorText = await response.text();
+          console.error('❌ Failed to create user session:', errorText);
           setAuthState({
             isAuthenticated: false,
             sessionToken: null,
@@ -145,7 +139,7 @@ export function useAuth() {
     };
 
     initializeAuth();
-  }, [ready, authenticated, privyUser?.id, getAccessToken, authState.isAuthenticated, authState.sessionToken, privyUser]);
+  }, [ready, authenticated, privyUser?.id, getAccessToken, privyUser]);
 
   return {
     ...authState,

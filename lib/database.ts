@@ -13,8 +13,20 @@ export async function createUser(privyUserId: string, email?: string, displayNam
 }
 
 export async function getUserByPrivyId(privyUserId: string) {
-  const [user] = await db.select().from(users).where(eq(users.privyUserId, privyUserId));
-  return user;
+  try {
+    
+    // Add a timeout to prevent hanging
+    const queryPromise = db.select().from(users).where(eq(users.privyUserId, privyUserId));
+    const timeoutPromise = new Promise((_, reject) => 
+      setTimeout(() => reject(new Error('Database query timeout')), 10000)
+    );
+    
+    const [user] = await Promise.race([queryPromise, timeoutPromise]) as any;
+    return user;
+  } catch (error) {
+    console.error('❌ getUserByPrivyId error:', error);
+    throw error;
+  }
 }
 
 export async function getUserById(userId: string) {
@@ -70,8 +82,20 @@ export async function saveProjectFiles(projectId: string, files: { filename: str
   // Delete existing files for this project
   await db.delete(projectFiles).where(eq(projectFiles.projectId, projectId));
   
+  // Filter out files that might cause encoding issues
+  const safeFiles = files.filter(file => {
+    // Check for potential encoding issues
+    if (file.content.includes('\0') || file.content.includes('\x00')) {
+      console.log(`⚠️ Skipping file with null bytes: ${file.filename}`);
+      return false;
+    }
+    return true;
+  });
+  
+  console.log(`📁 Saving ${safeFiles.length} safe files to database (${files.length - safeFiles.length} filtered out)`);
+  
   // Insert new files
-  const fileRecords = files.map(file => ({
+  const fileRecords = safeFiles.map(file => ({
     projectId,
     filename: file.filename,
     content: file.content,

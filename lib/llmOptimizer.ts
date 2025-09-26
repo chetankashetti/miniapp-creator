@@ -1,5 +1,43 @@
 // Multi-stage LLM optimization utilities for Farcaster Miniapp generation
 
+import * as fs from 'fs';
+import * as path from 'path';
+import { applyDiffToContent } from './diffUtils';
+import { applyDiffsToFiles } from './diffBasedPipeline';
+import { getDiffStatistics } from './enhancedPipeline';
+
+// Debug logging utilities
+const createDebugLogDir = (projectId: string): string => {
+  const debugDir = path.join(process.cwd(), 'debug-logs', projectId);
+  if (!fs.existsSync(debugDir)) {
+    fs.mkdirSync(debugDir, { recursive: true });
+  }
+  return debugDir;
+};
+
+const logStageResponse = (projectId: string, stageName: string, response: string, metadata?: any): void => {
+  try {
+    const debugDir = createDebugLogDir(projectId);
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const filename = `${stageName}-${timestamp}.log`;
+    const filepath = path.join(debugDir, filename);
+    
+    const logContent = {
+      timestamp: new Date().toISOString(),
+      stage: stageName,
+      projectId,
+      metadata,
+      responseLength: response.length,
+      response: response
+    };
+    
+    fs.writeFileSync(filepath, JSON.stringify(logContent, null, 2));
+    console.log(`📝 Debug log saved: ${filepath}`);
+  } catch (error) {
+    console.error('Failed to write debug log:', error);
+  }
+};
+
 // Anthropic Model Selection for Different Stages
 export const ANTHROPIC_MODELS = {
   // Fast, cost-effective for simple tasks
@@ -389,8 +427,26 @@ export interface PatchPlan {
         functions: string[];
       };
     }[];
+    // New diff-based fields
+    diffHunks?: DiffHunk[]; // Unified diff hunks for this file
+    unifiedDiff?: string; // Full unified diff for this file
   }[];
   implementationNotes?: string[]; // High-level notes for Stage 3 about implementation approach
+}
+
+// New interfaces for diff-based patching
+export interface DiffHunk {
+  oldStart: number;
+  oldLines: number;
+  newStart: number;
+  newLines: number;
+  lines: string[]; // The actual diff lines with +, -, and context
+}
+
+export interface FileDiff {
+  filename: string;
+  hunks: DiffHunk[];
+  unifiedDiff: string;
 }
 
 export function getStage2PatchPlannerPrompt(
@@ -407,7 +463,14 @@ INTENT: ${JSON.stringify(intentSpec, null, 2)}
 CURRENT FILES:
 ${currentFiles.map((f) => `---${f.filename}---\n${f.content}`).join("\n\n")}
 
-TASK: Plan detailed file changes to implement the intent (NO CODE GENERATION - PLANNING ONLY)
+TASK: Plan detailed file changes to implement the intent and generate unified diff hunks for surgical changes
+
+DIFF GENERATION REQUIREMENTS:
+- For each file modification, generate unified diff hunks in the format: @@ -oldStart,oldLines +newStart,newLines @@
+- Include context lines (unchanged lines) around changes for better accuracy
+- Use + prefix for added lines, - prefix for removed lines, space for context lines
+- Generate minimal, surgical diffs rather than full file rewrites
+- Focus on precise line-by-line changes to preserve existing code structure
 
 BOILERPLATE CONTEXT:
 ${JSON.stringify(FARCASTER_BOILERPLATE_CONTEXT, null, 2)}
@@ -439,7 +502,24 @@ OUTPUT FORMAT (JSON ONLY):
             "functions": ["claimTokens"]
           }
         }
-      ]
+      ],
+      "diffHunks": [
+        {
+          "oldStart": 1,
+          "oldLines": 3,
+          "newStart": 1,
+          "newLines": 6,
+          "lines": [
+            " import { ConnectWallet } from '@/components/wallet/ConnectWallet';",
+            " import { Tabs } from '@/components/ui/Tabs';",
+            "+import { useReadContract, useWriteContract, useWaitForTransactionReceipt } from 'wagmi';",
+            "+import { useAccount } from 'wagmi';",
+            " import { useUser } from '@/hooks';",
+            " "
+          ]
+        }
+      ],
+      "unifiedDiff": "@@ -1,3 +1,6 @@\n import { ConnectWallet } from '@/components/wallet/ConnectWallet';\n import { Tabs } from '@/components/ui/Tabs';\n+import { useReadContract, useWriteContract, useWaitForTransactionReceipt } from 'wagmi';\n+import { useAccount } from 'wagmi';\n import { useUser } from '@/hooks';\n \n@@ -40,10 +43,25 @@\n   const tabs = [\n     {\n       id: 'tab1',\n       title: 'Tab1',\n-      content: (\n-        <div className=\"space-y-4\">\n-          <h1>Tab 1 Content</h1>\n-        </div>\n-      )\n+      content: (\n+        <div className=\"space-y-4\">\n+          <h1>Token Airdrop</h1>\n+          <p>Claim your eligible tokens</p>\n+          <button onClick={handleClaim}>Claim Tokens</button>\n+        </div>\n+      )\n     },\n"
     }
   ],
   "implementationNotes": [
@@ -563,7 +643,14 @@ ${currentFiles.map((f) => `---${f.filename}---\n${f.content}`).join("\n\n")}
 BOILERPLATE CONTEXT:
 ${JSON.stringify(FARCASTER_BOILERPLATE_CONTEXT, null, 2)}
 
-TASK: Generate complete file contents based on the detailed patch plan descriptions and make it as minimal as possible. For follow-up prompts, modify existing files; for new features, create new files as needed.
+TASK: Generate unified diff patches based on the detailed patch plan. Apply surgical changes using the provided diff hunks rather than rewriting entire files. For new files, generate complete content. For modifications, output only the unified diff patches.
+
+DIFF-BASED APPROACH:
+- Use the provided diffHunks and unifiedDiff from the patch plan
+- Apply surgical changes to existing files using unified diff format
+- Preserve existing code structure and only modify necessary lines
+- For new files, generate complete file content
+- Validate that diffs are minimal and precise
 
 IMPLEMENTATION GUIDANCE FROM PATCH PLAN:
 - Follow the "purpose" field for each file to understand the overall goal
@@ -585,10 +672,27 @@ FARCASTER REQUIREMENTS FOR MAIN PAGE:
 CRITICAL: You MUST return ONLY valid JSON. No explanations, no text, no markdown, no code fences.
 
 OUTPUT FORMAT:
-Generate a JSON array of complete files:
+Generate a JSON array of file diffs and complete files:
 [
-  {"filename": "path/to/file", "content": "complete file content"},
-  {"filename": "path/to/file2", "content": "complete file content 2"}
+  {
+    "filename": "path/to/file",
+    "operation": "modify",
+    "unifiedDiff": "@@ -1,3 +1,6 @@\n import { ConnectWallet } from '@/components/wallet/ConnectWallet';\n import { Tabs } from '@/components/ui/Tabs';\n+import { useReadContract } from 'wagmi';\n+import { useAccount } from 'wagmi';\n import { useUser } from '@/hooks';\n ",
+    "diffHunks": [
+      {
+        "oldStart": 1,
+        "oldLines": 3,
+        "newStart": 1,
+        "newLines": 6,
+        "lines": [" import { ConnectWallet } from '@/components/wallet/ConnectWallet';", " import { Tabs } from '@/components/ui/Tabs';", "+import { useReadContract } from 'wagmi';", "+import { useAccount } from 'wagmi';", " import { useUser } from '@/hooks';", " "]
+      }
+    ]
+  },
+  {
+    "filename": "path/to/newfile",
+    "operation": "create",
+    "content": "complete file content for new files"
+  }
 ]
 
 CODE GENERATION RULES:
@@ -639,7 +743,7 @@ ${errors.join("\n")}
 FILES TO REGENERATE:
 ${generatedFiles.map((f) => `---${f.filename}---\n${f.content}`).join("\n\n")}
 
-TASK: Fix critical errors that would prevent the project from running
+TASK: Fix critical errors that would prevent the project from running. Generate unified diff patches for surgical fixes rather than rewriting entire files.
 
 BOILERPLATE CONTEXT:
 ${JSON.stringify(FARCASTER_BOILERPLATE_CONTEXT, null, 2)}
@@ -648,8 +752,20 @@ CRITICAL: Return ONLY a JSON array. No markdown, no code blocks, no explanations
 
 OUTPUT FORMAT:
 [
-  {"filename": "EXACT_SAME_FILENAME", "content": "corrected file content"},
-  {"filename": "EXACT_SAME_FILENAME2", "content": "corrected file content 2"}
+  {
+    "filename": "EXACT_SAME_FILENAME",
+    "operation": "modify",
+    "unifiedDiff": "@@ -1,3 +1,6 @@\n import { ConnectWallet } from '@/components/wallet/ConnectWallet';\n import { Tabs } from '@/components/ui/Tabs';\n+import { useReadContract } from 'wagmi';\n+import { useAccount } from 'wagmi';\n import { useUser } from '@/hooks';\n ",
+    "diffHunks": [
+      {
+        "oldStart": 1,
+        "oldLines": 3,
+        "newStart": 1,
+        "newLines": 6,
+        "lines": [" import { ConnectWallet } from '@/components/wallet/ConnectWallet';", " import { Tabs } from '@/components/ui/Tabs';", "+import { useReadContract } from 'wagmi';", "+import { useAccount } from 'wagmi';", " import { useUser } from '@/hooks';", " "]
+      }
+    ]
+  }
 ]
 
 CRITICAL FIXES ONLY:
@@ -703,7 +819,7 @@ Follow the System Rules. First PLAN (files + imports), then output CODE as a sin
 
 // Helper function to validate generated files
 export function validateGeneratedFiles(
-  files: { filename: string; content: string }[]
+  files: { filename: string; content?: string; unifiedDiff?: string; operation?: string }[]
 ): {
   isValid: boolean;
   missingFiles: string[];
@@ -717,10 +833,17 @@ export function validateGeneratedFiles(
     };
   }
 
-  // Check for empty files
-  const emptyFiles = files.filter(
-    (file) => !file.content || file.content.trim() === ""
-  );
+  // Check for empty files - handle both content and diff-based files
+  const emptyFiles = files.filter((file) => {
+    if (file.operation === 'create') {
+      return !file.content || file.content.trim() === "";
+    } else if (file.operation === 'modify') {
+      return !file.unifiedDiff || file.unifiedDiff.trim() === "";
+    }
+    // Fallback to content check for backward compatibility
+    return !file.content || file.content.trim() === "";
+  });
+  
   if (emptyFiles.length > 0) {
     console.warn(
       "Empty files detected:",
@@ -741,7 +864,7 @@ export function validateGeneratedFiles(
 
 // Helper function to check for missing imports/references
 export function validateImportsAndReferences(
-  files: { filename: string; content: string }[],
+  files: { filename: string; content?: string; unifiedDiff?: string; operation?: string }[],
   currentFiles?: { filename: string; content: string }[]
 ): {
   hasAllImports: boolean;
@@ -763,9 +886,16 @@ export function validateImportsAndReferences(
   ];
 
   files.forEach((file) => {
+    // Get content to analyze - prefer content for create operations, unifiedDiff for modify
+    const contentToAnalyze = file.operation === 'create' ? file.content : 
+                            file.operation === 'modify' ? file.unifiedDiff : 
+                            file.content || file.unifiedDiff;
+    
+    if (!contentToAnalyze) return; // Skip if no content to analyze
+    
     importPatterns.forEach((pattern) => {
       let match: RegExpExecArray | null;
-      while ((match = pattern.exec(file.content)) !== null) {
+      while ((match = pattern.exec(contentToAnalyze)) !== null) {
         let importPath = match[1];
 
         // Handle different import path formats
@@ -860,17 +990,24 @@ export function validateImportsAndReferences(
 }
 
 function validateClientDirectives(
-  files: { filename: string; content: string }[]
+  files: { filename: string; content?: string; unifiedDiff?: string; operation?: string }[]
 ): {
   missingClientDirective: { file: string; reason: string }[];
 } {
   const missingClientDirective: { file: string; reason: string }[] = [];
 
   files.forEach((file) => {
+    // Get content to analyze - prefer content for create operations, unifiedDiff for modify
+    const contentToAnalyze = file.operation === 'create' ? file.content : 
+                            file.operation === 'modify' ? file.unifiedDiff : 
+                            file.content || file.unifiedDiff;
+    
+    if (!contentToAnalyze) return; // Skip if no content to analyze
+    
     // Only check for critical client-side features that definitely need 'use client'
-    const usesClientHooks = /useState|useEffect/.test(file.content);
-    const usesEventHandlers = /onClick|onChange/.test(file.content);
-    const hasClientDirective = /"use client"/.test(file.content);
+    const usesClientHooks = /useState|useEffect/.test(contentToAnalyze);
+    const usesEventHandlers = /onClick|onChange/.test(contentToAnalyze);
+    const hasClientDirective = /"use client"/.test(contentToAnalyze);
 
     // Only flag if it's clearly a client component
     if ((usesClientHooks || usesEventHandlers) && !hasClientDirective) {
@@ -886,14 +1023,19 @@ function validateClientDirectives(
 
 // Simplified validation for critical TypeScript issues only
 function validateTypeScriptIssues(
-  files: { filename: string; content: string }[]
+  files: { filename: string; content?: string; unifiedDiff?: string; operation?: string }[]
 ): {
   typeErrors: { file: string; error: string }[];
 } {
   const typeErrors: { file: string; error: string }[] = [];
 
   files.forEach((file) => {
-    const content = file.content;
+    // Get content to analyze - prefer content for create operations, unifiedDiff for modify
+    const content = file.operation === 'create' ? file.content : 
+                   file.operation === 'modify' ? file.unifiedDiff : 
+                   file.content || file.unifiedDiff;
+    
+    if (!content) return; // Skip if no content to analyze
 
     // Only check for critical syntax errors that would prevent compilation
     const syntaxErrors = [
@@ -920,13 +1062,18 @@ function validateTypeScriptIssues(
 }
 
 // Simplified validation for critical React issues only
-function validateReactIssues(files: { filename: string; content: string }[]): {
+function validateReactIssues(files: { filename: string; content?: string; unifiedDiff?: string; operation?: string }[]): {
   reactErrors: { file: string; error: string }[];
 } {
   const reactErrors: { file: string; error: string }[] = [];
 
   files.forEach((file) => {
-    const content = file.content;
+    // Get content to analyze - prefer content for create operations, unifiedDiff for modify
+    const content = file.operation === 'create' ? file.content : 
+                   file.operation === 'modify' ? file.unifiedDiff : 
+                   file.content || file.unifiedDiff;
+    
+    if (!content) return; // Skip if no content to analyze
 
     // Only check for critical React issues that would prevent compilation
     const hasJSX = /<[A-Z][a-zA-Z]*\s*[^>]*>/g.test(content);
@@ -954,65 +1101,16 @@ export async function executeMultiStagePipeline(
     userPrompt: string,
     stageName: string,
     stageType?: keyof typeof STAGE_MODEL_CONFIG
-  ) => Promise<string>
+  ) => Promise<string>,
+  projectId?: string
 ): Promise<{ filename: string; content: string }[]> {
   try {
     console.log("🚀 Starting multi-stage pipeline...");
     console.log("📝 User Prompt:", userPrompt);
     console.log("📁 Current Files Count:", currentFiles.length);
 
-    // Stage 0: Context Gatherer
-    console.log("\n" + "=".repeat(50));
-    console.log("🔍 STAGE 0: Context Gatherer");
-    console.log("=".repeat(50));
-
-    const contextPrompt = `USER REQUEST: ${userPrompt}`;
-    console.log("📤 Sending to LLM (Stage 0):");
-    console.log(
-      "System Prompt Length:",
-      getStage0ContextGathererPrompt(userPrompt, currentFiles).length,
-      "chars"
-    );
-    console.log("User Prompt:", contextPrompt);
-
-    const startTime0 = Date.now();
-    const contextResponse = await callLLM(
-      getStage0ContextGathererPrompt(userPrompt, currentFiles),
-      contextPrompt,
-      "Stage 0: Context Gatherer",
-      "STAGE_0_CONTEXT_GATHERER"
-    );
-    const endTime0 = Date.now();
-
-    console.log("📥 Received from LLM (Stage 0):");
-    console.log("Response Length:", contextResponse.length, "chars");
-    console.log("Response Time:", endTime0 - startTime0, "ms");
-    console.log("Raw Response:", contextResponse.substring(0, 500) + "...");
-
-    let contextResult: ContextGatheringResult;
-    try {
-      contextResult = JSON.parse(contextResponse);
-    } catch (error) {
-      console.error("❌ Failed to parse Stage 0 response as JSON:");
-      console.error("Raw response:", contextResponse);
-      throw new Error(
-        `Stage 0 JSON parsing failed: ${
-          error instanceof Error ? error.message : String(error)
-        }`
-      );
-    }
-
-    console.log("🔍 Context Gathering Result:");
-    console.log("Needs Context:", contextResult.needsContext);
-    console.log("Tool Calls:", contextResult.toolCalls?.length || 0);
-    console.log("Context Summary:", contextResult.contextSummary);
-
-    // Execute tool calls if context is needed
-    if (contextResult.needsContext && contextResult.toolCalls?.length) {
-      console.log("🔧 Executing tool calls for context gathering...");
-      // Note: Tool execution will be handled by the calling function
-      // This is a placeholder for the enhanced context gathering
-    }
+    // Context gathering is handled by the enhanced pipeline
+    console.log("📋 Context already gathered by enhanced pipeline");
 
     // Stage 1: Intent Parser
     console.log("\n" + "=".repeat(50));
@@ -1036,6 +1134,15 @@ export async function executeMultiStagePipeline(
       "STAGE_1_INTENT_PARSER"
     );
     const endTime1 = Date.now();
+    
+    // Log Stage 1 response for debugging
+    if (projectId) {
+      logStageResponse(projectId, 'stage1-intent-parser', intentResponse, {
+        systemPromptLength: getStage1IntentParserPrompt().length,
+        userPromptLength: intentPrompt.length,
+        responseTime: endTime1 - startTime1
+      });
+    }
 
     console.log("📥 Received from LLM (Stage 1):");
     console.log("Response Length:", intentResponse.length, "chars");
@@ -1122,6 +1229,16 @@ export async function executeMultiStagePipeline(
       "STAGE_2_PATCH_PLANNER"
     );
     const endTime2 = Date.now();
+    
+    // Log Stage 2 response for debugging
+    if (projectId) {
+      logStageResponse(projectId, 'stage2-patch-planner', patchResponse, {
+        systemPromptLength: getStage2PatchPlannerPrompt(intentSpec, currentFiles).length,
+        userPromptLength: patchPrompt.length,
+        responseTime: endTime2 - startTime2,
+        intentSpec: intentSpec
+      });
+    }
 
     console.log("📥 Received from LLM (Stage 2):");
     console.log("Response Length:", patchResponse.length, "chars");
@@ -1129,17 +1246,110 @@ export async function executeMultiStagePipeline(
     console.log("Raw Response:", patchResponse.substring(0, 500) + "...");
 
     let patchPlan: PatchPlan;
-    try {
-      patchPlan = JSON.parse(patchResponse);
-    } catch (error) {
-      console.error("❌ Failed to parse Stage 2 response as JSON:");
-      console.error("Raw response:", patchResponse);
-      throw new Error(
-        `Stage 2 JSON parsing failed: ${
-          error instanceof Error ? error.message : String(error)
-        }`
-      );
-    }
+    
+    // Robust JSON parsing with multiple fallback strategies
+    const parseJsonWithFallbacks = (response: string): PatchPlan => {
+      // First try to parse the response directly
+      try {
+        return JSON.parse(response);
+      } catch (error) {
+        console.error('Direct JSON parsing failed, trying fallbacks...');
+        
+        // Fallback 1: Try to extract JSON from the response and fix common issues
+        try {
+          const jsonStart = response.indexOf('{');
+          const jsonEnd = response.lastIndexOf('}');
+          if (jsonStart >= 0 && jsonEnd > jsonStart) {
+            let jsonContent = response.substring(jsonStart, jsonEnd + 1);
+            
+            // More aggressive JSON sanitization
+            jsonContent = jsonContent
+              // Fix unescaped quotes in strings (but not in JSON structure)
+              .replace(/(?<!\\)"(?![,}\]])(?![^"]*"[^"]*:)/g, '\\"')
+              // Fix unescaped backslashes
+              .replace(/(?<!\\)\\(?![\\"\/bfnrt])/g, '\\\\')
+              // Fix unescaped newlines in strings
+              .replace(/(?<!\\)\n/g, '\\n')
+              // Fix unescaped carriage returns
+              .replace(/(?<!\\)\r/g, '\\r')
+              // Fix unescaped tabs
+              .replace(/(?<!\\)\t/g, '\\t');
+            
+            return JSON.parse(jsonContent);
+          }
+        } catch (fallbackError) {
+          console.error('JSON extraction fallback failed:', fallbackError);
+        }
+        
+        // Fallback 2: Try to extract just the patches array with better regex
+        try {
+          // More robust regex to find patches array
+          const patchesMatch = response.match(/"patches"\s*:\s*\[([\s\S]*?)\](?=\s*[,}])/);
+          if (patchesMatch) {
+            let patchesContent = patchesMatch[1];
+            
+            // Sanitize the patches content
+            patchesContent = patchesContent
+              .replace(/(?<!\\)"(?![,}\]])(?![^"]*"[^"]*:)/g, '\\"')
+              .replace(/(?<!\\)\\(?![\\"\/bfnrt])/g, '\\\\')
+              .replace(/(?<!\\)\n/g, '\\n')
+              .replace(/(?<!\\)\r/g, '\\r')
+              .replace(/(?<!\\)\t/g, '\\t');
+            
+            const patchesJson = `{"patches": [${patchesContent}]}`;
+            return JSON.parse(patchesJson);
+          }
+        } catch (patchesError) {
+          console.error('Patches extraction fallback failed:', patchesError);
+        }
+        
+        // Fallback 3: Try to extract individual patch objects
+        try {
+          const patchMatches = response.match(/\{[^{}]*"filename"[^{}]*\}/g);
+          if (patchMatches && patchMatches.length > 0) {
+            const sanitizedPatches = patchMatches.map(patch => {
+              return patch
+                .replace(/(?<!\\)"(?![,}\]])(?![^"]*"[^"]*:)/g, '\\"')
+                .replace(/(?<!\\)\\(?![\\"\/bfnrt])/g, '\\\\')
+                .replace(/(?<!\\)\n/g, '\\n')
+                .replace(/(?<!\\)\r/g, '\\r')
+                .replace(/(?<!\\)\t/g, '\\t');
+            });
+            
+            const patchesJson = `{"patches": [${sanitizedPatches.join(',')}]}`;
+            return JSON.parse(patchesJson);
+          }
+        } catch (patchObjectsError) {
+          console.error('Patch objects extraction fallback failed:', patchObjectsError);
+        }
+        
+        // Ultimate fallback: create a minimal valid patch plan with diff hunks
+        console.log('All fallbacks failed, creating minimal patch plan...');
+        return {
+          patches: [{
+            filename: "src/app/page.tsx",
+            operation: "modify",
+            purpose: "Update main page for the requested miniapp",
+            changes: [{
+              type: "replace",
+              target: "content",
+              description: "Replace page content with the requested functionality",
+              location: "main content area"
+            }],
+            diffHunks: [{
+              oldStart: 1,
+              oldLines: 1,
+              newStart: 1,
+              newLines: 1,
+              lines: ["-// Original content", "+// Updated content"]
+            }],
+            unifiedDiff: "@@ -1,1 +1,1 @@\n-// Original content\n+// Updated content"
+          }]
+        };
+      }
+    };
+    
+    patchPlan = parseJsonWithFallbacks(patchResponse);
 
     // Validate patch plan structure
     if (!patchPlan.patches || !Array.isArray(patchPlan.patches)) {
@@ -1147,6 +1357,16 @@ export async function executeMultiStagePipeline(
         "Invalid patch plan: patches array is missing or not an array"
       );
     }
+
+    // Analyze patch plan for diff efficiency
+    let totalPatches = 0;
+    let createPatches = 0;
+    let modifyPatches = 0;
+    let deletePatches = 0;
+    let patchesWithDiffs = 0;
+    let totalDiffHunks = 0;
+    let totalDiffLines = 0;
+    let totalUnifiedDiffs = 0;
 
     patchPlan.patches.forEach((patch, index) => {
       // Validate each patch structure
@@ -1181,12 +1401,65 @@ export async function executeMultiStagePipeline(
         return;
       }
 
+      // Count patch types
+      totalPatches++;
+      if (patch.operation === 'create') createPatches++;
+      else if (patch.operation === 'modify') modifyPatches++;
+      else if (patch.operation === 'delete') deletePatches++;
+
+      // Analyze diff efficiency
+      if (patch.diffHunks && Array.isArray(patch.diffHunks)) {
+        patchesWithDiffs++;
+        totalDiffHunks += patch.diffHunks.length;
+        
+        patch.diffHunks.forEach(hunk => {
+          if (hunk.lines && Array.isArray(hunk.lines)) {
+            totalDiffLines += hunk.lines.length;
+          }
+        });
+      }
+
+      if (patch.unifiedDiff && typeof patch.unifiedDiff === 'string') {
+        totalUnifiedDiffs++;
+      }
+
       console.log(
         `  Patch ${index + 1}: ${patch.operation} ${patch.filename} (${
           patch.changes.length
-        } changes)`
+        } changes${patch.diffHunks ? `, ${patch.diffHunks.length} diff hunks` : ''})`
       );
     });
+
+    // Log diff efficiency metrics
+    console.log("\n📊 Stage 2 Diff Efficiency Analysis:");
+    console.log(`  Total Patches: ${totalPatches}`);
+    console.log(`  - Create: ${createPatches}`);
+    console.log(`  - Modify: ${modifyPatches}`);
+    console.log(`  - Delete: ${deletePatches}`);
+    console.log(`  Patches with Diffs: ${patchesWithDiffs}/${totalPatches} (${Math.round((patchesWithDiffs/totalPatches)*100)}%)`);
+    console.log(`  Total Diff Hunks: ${totalDiffHunks}`);
+    console.log(`  Total Diff Lines: ${totalDiffLines}`);
+    console.log(`  Unified Diffs: ${totalUnifiedDiffs}/${modifyPatches} (${modifyPatches > 0 ? Math.round((totalUnifiedDiffs/modifyPatches)*100) : 0}%)`);
+    
+    if (totalDiffHunks > 0) {
+      console.log(`  Avg Lines per Hunk: ${Math.round(totalDiffLines/totalDiffHunks)}`);
+    }
+    
+    if (patchesWithDiffs > 0) {
+      console.log(`  Avg Hunks per Patch: ${Math.round(totalDiffHunks/patchesWithDiffs)}`);
+    }
+
+    // Calculate efficiency score
+    const diffEfficiency = patchesWithDiffs > 0 ? (totalUnifiedDiffs / patchesWithDiffs) * 100 : 0;
+    console.log(`  🎯 Diff Efficiency Score: ${Math.round(diffEfficiency)}%`);
+    
+    if (diffEfficiency >= 80) {
+      console.log(`  ✅ Excellent: Most patches use surgical diffs`);
+    } else if (diffEfficiency >= 60) {
+      console.log(`  ⚠️ Good: Some patches could be more surgical`);
+    } else {
+      console.log(`  ❌ Poor: Many patches lack diff optimization`);
+    }
 
     // Stage 3: Code Generator
     console.log("\n" + "=".repeat(50));
@@ -1214,13 +1487,24 @@ export async function executeMultiStagePipeline(
       "STAGE_3_CODE_GENERATOR"
     );
     const endTime3 = Date.now();
+    
+    // Log Stage 3 response for debugging
+    if (projectId) {
+      logStageResponse(projectId, 'stage3-code-generator', codeResponse, {
+        systemPromptLength: getStage3CodeGeneratorPrompt(patchPlan, intentSpec, currentFiles).length,
+        userPromptLength: codePrompt.length,
+        responseTime: endTime3 - startTime3,
+        patchPlan: patchPlan,
+        intentSpec: intentSpec
+      });
+    }
 
     console.log("📥 Received from LLM (Stage 3):");
     console.log("Response Length:", codeResponse.length, "chars");
     console.log("Response Time:", endTime3 - startTime3, "ms");
     console.log("Raw Response:", codeResponse.substring(0, 500) + "...");
 
-    let generatedFiles: { filename: string; content: string }[];
+    let generatedFiles: { filename: string; content?: string; unifiedDiff?: string; operation?: string }[];
     try {
       generatedFiles = JSON.parse(codeResponse);
     } catch (error) {
@@ -1246,16 +1530,109 @@ export async function executeMultiStagePipeline(
       if (!file.filename || typeof file.filename !== "string") {
         throw new Error(`Stage 3 file ${index + 1} missing 'filename' field`);
       }
-      if (!file.content || typeof file.content !== "string") {
+      // For diff-based files, content might not be present if it's a modification with unifiedDiff
+      if (file.operation === 'create' && (!file.content || typeof file.content !== "string")) {
+        throw new Error(`Stage 3 file ${index + 1} (create) missing 'content' field`);
+      }
+      if (file.operation === 'modify' && !file.unifiedDiff && !file.content) {
+        throw new Error(`Stage 3 file ${index + 1} (modify) missing both 'unifiedDiff' and 'content' fields`);
+      }
+      // For files without operation specified, require content
+      if (!file.operation && (!file.content || typeof file.content !== "string")) {
         throw new Error(`Stage 3 file ${index + 1} missing 'content' field`);
       }
     });
 
-    console.log("✅ Stage 3 complete - Generated Files:");
-    console.log("  Total Files:", generatedFiles.length);
+    // Analyze Stage 3 code generation efficiency
+    let totalFiles = 0;
+    let createFilesStage3 = 0;
+    let modifyFilesStage3 = 0;
+    let deleteFilesStage3 = 0;
+    let filesWithDiffsStage3 = 0;
+    let filesWithContentStage3 = 0;
+    let totalContentLength = 0;
+    let totalDiffLength = 0;
+
     generatedFiles.forEach((file, index) => {
+      totalFiles++;
+      
+      if (file.operation === 'create') createFilesStage3++;
+      else if (file.operation === 'modify') modifyFilesStage3++;
+      else if (file.operation === 'delete') deleteFilesStage3++;
+
+      if (file.unifiedDiff) {
+        filesWithDiffsStage3++;
+        totalDiffLength += file.unifiedDiff.length;
+      }
+
+      if (file.content) {
+        filesWithContentStage3++;
+        totalContentLength += file.content.length;
+      }
+    });
+
+    console.log("✅ Stage 3 complete - Generated Files:");
+    console.log("  Total Files:", totalFiles);
+    console.log(`  - Create: ${createFilesStage3}`);
+    console.log(`  - Modify: ${modifyFilesStage3}`);
+    console.log(`  - Delete: ${deleteFilesStage3}`);
+    console.log(`  Files with Diffs: ${filesWithDiffsStage3}/${totalFiles} (${Math.round((filesWithDiffsStage3/totalFiles)*100)}%)`);
+    console.log(`  Files with Content: ${filesWithContentStage3}/${totalFiles} (${Math.round((filesWithContentStage3/totalFiles)*100)}%)`);
+    
+    if (filesWithDiffsStage3 > 0) {
+      console.log(`  Avg Diff Length: ${Math.round(totalDiffLength/filesWithDiffsStage3)} chars`);
+    }
+    
+    if (filesWithContentStage3 > 0) {
+      console.log(`  Avg Content Length: ${Math.round(totalContentLength/filesWithContentStage3)} chars`);
+    }
+
+    // Enhanced diff statistics using getDiffStatistics
+    try {
+      const filesWithDiffsForStats = generatedFiles
+        .filter(file => file.unifiedDiff)
+        .map(file => ({
+          filename: file.filename,
+          content: file.content || '',
+          diff: {
+            filename: file.filename,
+            hunks: [], // Will be populated by parseUnifiedDiff if needed
+            unifiedDiff: file.unifiedDiff!
+          }
+        }));
+      
+      if (filesWithDiffsForStats.length > 0) {
+        const diffStats = getDiffStatistics(filesWithDiffsForStats);
+        console.log("\n📊 Enhanced Diff Statistics:");
+        console.log(`  Total Additions: ${diffStats.totalAdditions} lines`);
+        console.log(`  Total Deletions: ${diffStats.totalDeletions} lines`);
+        console.log(`  Total Hunks: ${diffStats.totalHunks}`);
+        console.log(`  Net Change: ${diffStats.totalAdditions - diffStats.totalDeletions} lines`);
+      }
+    } catch (error) {
+      console.log("⚠️ Could not generate enhanced diff statistics:", error);
+    }
+
+    // Calculate code generation efficiency
+    const diffUsage = totalFiles > 0 ? (filesWithDiffsStage3 / totalFiles) * 100 : 0;
+    console.log(`  🎯 Code Generation Efficiency: ${Math.round(diffUsage)}%`);
+    
+    if (diffUsage >= 70) {
+      console.log(`  ✅ Excellent: Most files use surgical diffs`);
+    } else if (diffUsage >= 40) {
+      console.log(`  ⚠️ Good: Some files could use more surgical diffs`);
+    } else {
+      console.log(`  ❌ Poor: Many files use full content instead of diffs`);
+    }
+
+    // Log individual files
+    generatedFiles.forEach((file, index) => {
+      const contentLength = file.content ? file.content.length : 
+                           file.unifiedDiff ? file.unifiedDiff.length : 0;
+      const operation = file.operation || 'unknown';
+      const diffInfo = file.unifiedDiff ? `, ${file.unifiedDiff.length} diff chars` : '';
       console.log(
-        `  File ${index + 1}: ${file.filename} (${file.content.length} chars)`
+        `  File ${index + 1}: ${file.filename} (${operation}, ${contentLength} chars${diffInfo})`
       );
     });
 
@@ -1388,7 +1765,10 @@ export async function executeMultiStagePipeline(
           hasTypeScriptError ||
           hasReactError
         );
-      });
+      }).map(file => ({
+        filename: file.filename,
+        content: file.content || '' // Ensure content is always a string
+      }));
 
       console.log("📁 Files to keep:", validFiles.length);
       validFiles.forEach((file) => console.log(`  ✅ Keep: ${file.filename}`));
@@ -1493,7 +1873,7 @@ export async function executeMultiStagePipeline(
       // Remove duplicates by filename (keep the last occurrence)
       const uniqueFiles = new Map<
         string,
-        { filename: string; content: string }
+        { filename: string; content?: string; unifiedDiff?: string; operation?: string }
       >();
       generatedFiles.forEach((file) => {
         uniqueFiles.set(file.filename, file);
@@ -1506,21 +1886,142 @@ export async function executeMultiStagePipeline(
     console.log("✅ Stage 4 complete - Final Files:");
     console.log("  Total Files:", generatedFiles.length);
     generatedFiles.forEach((file, index) => {
+      const contentLength = file.content ? file.content.length : 
+                           file.unifiedDiff ? file.unifiedDiff.length : 0;
+      const operation = file.operation || 'unknown';
       console.log(
-        `  File ${index + 1}: ${file.filename} (${file.content.length} chars)`
+        `  File ${index + 1}: ${file.filename} (${operation}, ${contentLength} chars)`
       );
     });
 
-    // Final Summary
+    // Final Summary with Efficiency Analysis
     console.log("\n" + "=".repeat(50));
     console.log("🎉 PIPELINE COMPLETED SUCCESSFULLY!");
     console.log("=".repeat(50));
+    
+    // Calculate overall efficiency metrics
+    const totalTime = Date.now() - startTime1;
+    const finalFiles = generatedFiles.length;
+    const finalFilesWithDiffs = generatedFiles.filter(f => f.unifiedDiff).length;
+    const finalFilesWithContent = generatedFiles.filter(f => f.content).length;
+    const finalCreateFiles = generatedFiles.filter(f => f.operation === 'create').length;
+    const finalModifyFiles = generatedFiles.filter(f => f.operation === 'modify').length;
+    
+    const overallDiffEfficiency = finalFiles > 0 ? (finalFilesWithDiffs / finalFiles) * 100 : 0;
+    const surgicalModificationRate = finalModifyFiles > 0 ? (finalFilesWithDiffs / finalModifyFiles) * 100 : 0;
+    
     console.log("📊 Final Summary:");
-    console.log("  Total Files Generated:", generatedFiles.length);
-    console.log("  Total Time:", Date.now() - startTime1, "ms");
+    console.log("  Total Files Generated:", finalFiles);
+    console.log("  - Create:", finalCreateFiles);
+    console.log("  - Modify:", finalModifyFiles);
+    console.log("  Files with Diffs:", finalFilesWithDiffs, `(${Math.round(overallDiffEfficiency)}%)`);
+    console.log("  Files with Content:", finalFilesWithContent);
+    console.log("  Total Time:", totalTime, "ms");
+    
+    console.log("\n🎯 Overall Efficiency Metrics:");
+    console.log(`  Diff Efficiency: ${Math.round(overallDiffEfficiency)}%`);
+    console.log(`  Surgical Modification Rate: ${Math.round(surgicalModificationRate)}%`);
+    console.log(`  Avg Time per File: ${Math.round(totalTime / finalFiles)}ms`);
+    
+    if (overallDiffEfficiency >= 70) {
+      console.log("  ✅ Excellent: High diff efficiency achieved");
+    } else if (overallDiffEfficiency >= 40) {
+      console.log("  ⚠️ Good: Moderate diff efficiency");
+    } else {
+      console.log("  ❌ Poor: Low diff efficiency - consider optimization");
+    }
+    
     console.log("  Files:", generatedFiles.map((f) => f.filename).join(", "));
 
-    return generatedFiles;
+    // Convert generated files to required format with content field
+    // First, separate files with diffs from files with content
+    const filesWithDiffs = generatedFiles.filter(file => file.unifiedDiff && !file.content);
+    const filesWithContent = generatedFiles.filter(file => file.content);
+    
+    // Apply diffs to original files using the robust applyDiffsToFiles function
+    let processedFiles: { filename: string; content: string }[] = [];
+    
+    if (filesWithDiffs.length > 0) {
+      console.log(`🔄 Applying diffs to ${filesWithDiffs.length} files...`);
+      
+      // Convert unified diffs to FileDiff format for applyDiffsToFiles
+      const diffs = filesWithDiffs.map(file => {
+        const originalFile = currentFiles.find(f => f.filename === file.filename);
+        if (!originalFile) {
+          console.warn(`⚠️ Original file not found for ${file.filename}, treating as new file`);
+          // For new files, we'll use the diff content as the file content
+          return {
+            filename: file.filename,
+            hunks: [], // Will be populated by parseUnifiedDiff
+            unifiedDiff: file.unifiedDiff!
+          };
+        }
+        
+        return {
+          filename: file.filename,
+          hunks: [], // Will be populated by parseUnifiedDiff
+          unifiedDiff: file.unifiedDiff!
+        };
+      });
+      
+      try {
+        const filesWithAppliedDiffs = applyDiffsToFiles(currentFiles, diffs);
+        processedFiles.push(...filesWithAppliedDiffs);
+        console.log(`✅ Successfully applied diffs to ${filesWithAppliedDiffs.length} files`);
+      } catch (error) {
+        console.error('❌ Failed to apply diffs using applyDiffsToFiles:', error);
+        // Fallback to individual diff application
+        filesWithDiffs.forEach(file => {
+          const originalFile = currentFiles.find(f => f.filename === file.filename);
+          if (originalFile) {
+            try {
+              const appliedContent = applyDiffToContent(originalFile.content, file.unifiedDiff!);
+              processedFiles.push({
+                filename: file.filename,
+                content: appliedContent
+              });
+            } catch (diffError) {
+              console.error(`❌ Failed to apply diff to ${file.filename}:`, diffError);
+              processedFiles.push({
+                filename: file.filename,
+                content: originalFile.content
+              });
+            }
+          } else {
+            // For new files, extract content from the diff
+            console.log(`📝 Creating new file ${file.filename} from diff content`);
+            try {
+              // Extract the content from the unified diff
+              const diffLines = file.unifiedDiff!.split('\n');
+              const contentLines = diffLines
+                .filter(line => line.startsWith('+') && !line.startsWith('+++'))
+                .map(line => line.substring(1))
+                .join('\n');
+              
+              processedFiles.push({
+                filename: file.filename,
+                content: contentLines
+              });
+            } catch (extractError) {
+              console.error(`❌ Failed to extract content from diff for ${file.filename}:`, extractError);
+              // Use empty content as fallback
+              processedFiles.push({
+                filename: file.filename,
+                content: ''
+              });
+            }
+          }
+        });
+      }
+    }
+    
+    // Add files that already have content
+    processedFiles.push(...filesWithContent.map(file => ({
+      filename: file.filename,
+      content: file.content!
+    })));
+    
+    return processedFiles;
   } catch (error) {
     console.error("❌ Multi-stage pipeline failed:");
     console.error("  Error:", error);

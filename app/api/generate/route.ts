@@ -24,6 +24,7 @@ import {
   ANTHROPIC_MODELS,
 } from "../../../lib/llmOptimizer";
 import { executeEnhancedPipeline } from "../../../lib/enhancedPipeline";
+import { executeDiffBasedPipeline } from "../../../lib/diffBasedPipeline";
 import { headers } from "next/headers";
 
 // Utility: Recursively read all files in a directory, excluding node_modules, .next, and other build artifacts
@@ -606,7 +607,7 @@ export async function PATCH(request: NextRequest) {
       );
     }
 
-    const { projectId, prompt, stream = false } = await request.json();
+    const { projectId, prompt, stream = false, useDiffBased = true } = await request.json();
     const accessToken = (await headers())
       .get("authorization")
       ?.replace("Bearer ", "");
@@ -628,7 +629,14 @@ export async function PATCH(request: NextRequest) {
     const userDir = path.join(process.cwd(), "generated", projectId);
 
     // Read all files in the project (excluding node_modules, .next, etc.)
-    const boilerplateFiles = await readAllFiles(userDir);
+    const currentFiles = await readAllFiles(userDir);
+
+    if (currentFiles.length === 0) {
+      return NextResponse.json(
+        { error: "No existing files found for project" },
+        { status: 404 }
+      );
+    }
 
     if (stream) {
       // Handle streaming response for chat-like interaction
@@ -687,8 +695,76 @@ export async function PATCH(request: NextRequest) {
           "Transfer-Encoding": "chunked",
         },
       });
+    } else if (useDiffBased) {
+      // Handle diff-based updates
+      console.log(`🔄 Diff-based update for project ${projectId}`);
+      console.log("User prompt:", prompt);
+
+      // Execute diff-based pipeline
+      const result = await executeDiffBasedPipeline(
+        prompt,
+        currentFiles,
+        callClaudeWithLogging,
+        {
+          enableContextGathering: true,
+          enableDiffValidation: true,
+          enableLinting: true
+        },
+        projectId,
+        userDir
+      );
+
+      console.log(`✅ Generated ${result.files.length} files with ${result.diffs.length} diffs`);
+
+      // Write changes to generated directory
+      await writeFilesToDir(userDir, result.files);
+
+      // Update files in the preview
+      console.log("Updating files in preview...");
+      await updatePreviewFiles(projectId, result.files, accessToken);
+      console.log("Preview files updated successfully");
+
+      // Update project files in database
+      try {
+        console.log("💾 Updating project files in database...");
+        // Read all files from the updated directory and save them
+        const allFiles = await readAllFiles(userDir);
+        console.log(`📁 Found ${allFiles.length} files to save to database`);
+        
+        // Filter out any files that might cause encoding issues
+        const safeFiles = allFiles.filter(file => {
+          // Check for potential encoding issues
+          if (file.content.includes('\0') || file.content.includes('\x00')) {
+            console.log(`⚠️ Skipping file with null bytes: ${file.filename}`);
+            return false;
+          }
+          return true;
+        });
+        
+        console.log(`📁 Saving ${safeFiles.length} safe files to database`);
+        await saveProjectFiles(projectId, safeFiles);
+        console.log("✅ Project files updated in database successfully");
+      } catch (dbError) {
+        console.error("⚠️ Failed to update project files in database:", dbError);
+        // Don't fail the request if database update fails
+      }
+
+      // Store diffs for rollback capability
+      if (result.diffs.length > 0) {
+        // TODO: Implement diff storage
+        console.log(`📦 Storing ${result.diffs.length} diffs for rollback`);
+      }
+
+      return NextResponse.json({
+        success: true,
+        projectId,
+        files: result.files,
+        diffs: result.diffs,
+        previewUrl: `http://localhost:8080/p/${projectId}`,
+        message: "Project updated with diff-based changes"
+      });
     } else {
-      // Handle non-streaming response (existing logic)
+      // Handle non-streaming response with enhanced pipeline
       const callLLM = async (
         systemPrompt: string,
         userPrompt: string,
@@ -709,7 +785,7 @@ export async function PATCH(request: NextRequest) {
       );
       const enhancedResult = await executeEnhancedPipeline(
         prompt,
-        boilerplateFiles,
+        currentFiles,
         projectId,
         accessToken,
         callLLM

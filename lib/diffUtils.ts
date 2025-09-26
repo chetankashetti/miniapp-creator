@@ -39,9 +39,66 @@ export function generateDiff(
 }
 
 /**
- * Apply diff hunks to original content
+ * Apply unified diff string to original content
  */
 export function applyDiffToContent(
+  originalContent: string,
+  unifiedDiff: string
+): string {
+  try {
+    // Parse the unified diff string into hunks
+    const hunks = parseUnifiedDiff(unifiedDiff);
+    return applyDiffHunks(originalContent, hunks);
+  } catch (error) {
+    console.error('Error applying unified diff:', error);
+    throw new Error(`Failed to apply unified diff: ${error}`);
+  }
+}
+
+/**
+ * Parse unified diff string into hunks
+ */
+function parseUnifiedDiff(unifiedDiff: string): DiffHunk[] {
+  const hunks: DiffHunk[] = [];
+  const lines = unifiedDiff.split('\n');
+  
+  let currentHunk: DiffHunk | null = null;
+  
+  for (const line of lines) {
+    if (line.startsWith('@@')) {
+      // Save previous hunk if exists
+      if (currentHunk) {
+        hunks.push(currentHunk);
+      }
+      
+      // Parse hunk header: @@ -oldStart,oldLines +newStart,newLines @@
+      const match = line.match(/@@ -(\d+),?(\d*) \+(\d+),?(\d*) @@/);
+      if (match) {
+        currentHunk = {
+          oldStart: parseInt(match[1]),
+          oldLines: parseInt(match[2]) || 0,
+          newStart: parseInt(match[3]),
+          newLines: parseInt(match[4]) || 0,
+          lines: []
+        };
+      }
+    } else if (currentHunk) {
+      currentHunk.lines.push(line);
+    }
+  }
+  
+  // Add the last hunk
+  if (currentHunk) {
+    hunks.push(currentHunk);
+  }
+  
+  return hunks;
+}
+
+/**
+ * Apply diff hunks to original content
+ */
+export function applyDiffHunks(
   originalContent: string,
   diffHunks: DiffHunk[]
 ): string {

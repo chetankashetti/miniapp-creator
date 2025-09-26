@@ -298,3 +298,81 @@ export async function deleteGeneratedFile(
     throw error;
   }
 }
+
+// Diff-based preview update for surgical changes
+export async function updatePreviewWithDiffs(
+  projectId: string,
+  files: { filename: string; content: string }[],
+  accessToken: string,
+  diffs?: Array<{ filename: string; hunks: unknown[]; unifiedDiff: string }>
+): Promise<PreviewResponse> {
+  console.log(`🔄 Updating preview with diffs for project ${projectId}`);
+  console.log(`📁 Files to update: ${files.length}`);
+  console.log(`🔧 Diffs to apply: ${diffs?.length || 0}`);
+
+  try {
+    // Use the existing updatePreviewFiles function
+    await updatePreviewFiles(projectId, files, accessToken);
+    
+    // Since updatePreviewFiles returns void, we need to create a PreviewResponse
+    const previewResponse: PreviewResponse = {
+      url: `${PREVIEW_API_BASE}/preview/${projectId}`,
+      status: 'updated',
+      port: 3000 // Default port
+    };
+    console.log(`✅ Preview updated with diffs: ${previewResponse.url}`);
+    return previewResponse;
+  } catch (error) {
+    console.error(`❌ Failed to update preview with diffs:`, error);
+    throw error;
+  }
+}
+
+// Store diffs for rollback capability
+export async function storeDiffs(
+  projectId: string,
+  diffs: Array<{ filename: string; hunks: unknown[]; unifiedDiff: string }>
+): Promise<void> {
+  const patchesDir = path.join(process.cwd(), "generated", projectId, "patches");
+  
+  try {
+    await fs.ensureDir(patchesDir);
+    
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const diffFile = path.join(patchesDir, `diff-${timestamp}.json`);
+    
+    await fs.writeFile(diffFile, JSON.stringify(diffs, null, 2));
+    console.log(`📦 Stored ${diffs.length} diffs for project ${projectId}`);
+  } catch (error) {
+    console.error(`❌ Failed to store diffs:`, error);
+    throw error;
+  }
+}
+
+// Get stored diffs for rollback
+export async function getStoredDiffs(projectId: string): Promise<Array<{ filename: string; hunks: unknown[]; unifiedDiff: string }>> {
+  const patchesDir = path.join(process.cwd(), "generated", projectId, "patches");
+  
+  try {
+    if (!(await fs.pathExists(patchesDir))) {
+      return [];
+    }
+    
+    const files = await fs.readdir(patchesDir);
+    const diffFiles = files.filter(f => f.startsWith('diff-') && f.endsWith('.json'));
+    
+    if (diffFiles.length === 0) {
+      return [];
+    }
+    
+    // Get the most recent diff file
+    const latestDiffFile = diffFiles.sort().pop();
+    const diffPath = path.join(patchesDir, latestDiffFile!);
+    
+    const diffContent = await fs.readFile(diffPath, 'utf8');
+    return JSON.parse(diffContent);
+  } catch (error) {
+    console.error(`❌ Failed to get stored diffs:`, error);
+    return [];
+  }
+}

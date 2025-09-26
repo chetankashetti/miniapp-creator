@@ -142,15 +142,13 @@ async function callClaude(
   if (!apiKey) throw new Error("Claude API key not set");
 
   const requestBody = {
-    model: "claude-sonnet-4-20250514",
+    model: "claude-3-5-haiku-20241022",
     max_tokens: 4000,
     temperature: 0.2,
     system: systemPrompt,
     messages: [{ role: "user", content: userMessage }],
     stream: stream,
   };
-
-  console.log("Claude API request body:", JSON.stringify(requestBody, null, 2));
 
   const response = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
@@ -162,12 +160,8 @@ async function callClaude(
     body: JSON.stringify(requestBody),
   });
 
-  console.log("Claude API response status:", response.status);
-  console.log("Claude API response headers:", Object.fromEntries(response.headers.entries()));
-
   if (!response.ok) {
     const errorText = await response.text();
-    console.log("Claude API error response:", errorText);
     throw new Error(`Claude API error: ${response.status} - ${errorText}`);
   }
 

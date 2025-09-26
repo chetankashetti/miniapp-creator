@@ -1,5 +1,39 @@
 import { SecureCommandExecutor, formatCommandResult } from './commandExecutor';
 import { ContextGatheringResult, STAGE_MODEL_CONFIG } from './llmOptimizer';
+import * as fs from 'fs';
+import * as path from 'path';
+
+// Debug logging utilities
+const createDebugLogDir = (projectId: string): string => {
+  const debugDir = path.join(process.cwd(), 'debug-logs', projectId);
+  if (!fs.existsSync(debugDir)) {
+    fs.mkdirSync(debugDir, { recursive: true });
+  }
+  return debugDir;
+};
+
+const logStageResponse = (projectId: string, stageName: string, response: string, metadata?: any): void => {
+  try {
+    const debugDir = createDebugLogDir(projectId);
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const filename = `${stageName}-${timestamp}.log`;
+    const filepath = path.join(debugDir, filename);
+    
+    const logContent = {
+      timestamp: new Date().toISOString(),
+      stage: stageName,
+      projectId,
+      metadata,
+      responseLength: response.length,
+      response: response
+    };
+    
+    fs.writeFileSync(filepath, JSON.stringify(logContent, null, 2));
+    console.log(`📝 Debug log saved: ${filepath}`);
+  } catch (error) {
+    console.error('Failed to write debug log:', error);
+  }
+};
 
 export interface ToolExecutionResult {
   success: boolean;
@@ -192,10 +226,12 @@ CURRENT FILES AVAILABLE:
 ${currentFiles.map(f => `- ${f.filename}`).join('\n')}
 
 AVAILABLE TOOLS:
-- grep: Search for patterns in files
+- grep: Search for patterns in files (use simple patterns, avoid | & ; characters)
 - find: Find files by name or type
 - tree: Show directory structure
 - cat: Read file contents
+
+SECURITY NOTE: Avoid using | & ; characters in grep patterns. Use separate grep calls instead.
 
 CRITICAL: Return ONLY valid JSON.
 
@@ -211,17 +247,49 @@ Return ONLY the JSON object.`,
     "Context Gatherer",
     "STAGE_0_CONTEXT_GATHERER"
   );
+  
+  // Log context gathering response for debugging
+  logStageResponse(projectId, 'stage0-context-gatherer', contextResponse, {
+    userPromptLength: contextPrompt.length,
+    currentFilesCount: currentFiles.length
+  });
 
   let contextResult: ContextGatheringResult;
   try {
+    // First try to parse the response directly
     contextResult = JSON.parse(contextResponse);
   } catch (error) {
     console.error('Failed to parse context gathering result:', error);
-    return {
-      contextResult: { needsContext: false, toolCalls: [] },
-      contextData: '',
-      enhancedFiles: currentFiles
-    };
+    console.error('Raw response:', contextResponse.substring(0, 500));
+    
+    // Fallback: try to extract and clean JSON from the response
+    try {
+      const jsonStart = contextResponse.indexOf('{');
+      const jsonEnd = contextResponse.lastIndexOf('}');
+      if (jsonStart >= 0 && jsonEnd > jsonStart) {
+        let jsonContent = contextResponse.substring(jsonStart, jsonEnd + 1);
+        
+        // Clean up common JSON issues
+        jsonContent = jsonContent
+          .replace(/\n/g, '\\n')  // Escape newlines
+          .replace(/\r/g, '\\r')  // Escape carriage returns
+          .replace(/\t/g, '\\t')  // Escape tabs
+          .replace(/\f/g, '\\f')  // Escape form feeds
+          .replace(/\b/g, '\\b')  // Escape backspaces
+          .replace(/\v/g, '\\v'); // Escape vertical tabs
+        
+        contextResult = JSON.parse(jsonContent);
+      } else {
+        throw new Error('No valid JSON found in response');
+      }
+    } catch (fallbackError) {
+      console.error('Fallback parsing also failed:', fallbackError);
+      return {
+        contextResult: { needsContext: false, toolCalls: [] },
+        contextData: '',
+        enhancedFiles: currentFiles
+      };
+    }
   }
 
   if (!contextResult.needsContext) {
