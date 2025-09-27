@@ -5,6 +5,12 @@ import * as path from 'path';
 import { applyDiffToContent } from './diffUtils';
 import { applyDiffsToFiles } from './diffBasedPipeline';
 import { getDiffStatistics } from './enhancedPipeline';
+import { 
+  parseStage2PatchResponse, 
+  parseStage3CodeResponse, 
+  parseStage4ValidatorResponse,
+  isResponseTruncated 
+} from './parserUtils';
 
 // Debug logging utilities
 const createDebugLogDir = (projectId: string): string => {
@@ -68,9 +74,9 @@ export const STAGE_MODEL_CONFIG = {
   STAGE_2_PATCH_PLANNER: {
     model: ANTHROPIC_MODELS.BALANCED,
     fallbackModel: ANTHROPIC_MODELS.POWERFUL, // Use latest Sonnet if regular Sonnet is overloaded
-    maxTokens: 4000,
+    maxTokens: 12000,
     temperature: 0,
-    reason: "Complex planning task, needs good reasoning",
+    reason: "Complex planning task, needs good reasoning and more tokens for detailed diffs",
   },
   STAGE_3_CODE_GENERATOR: {
     model: ANTHROPIC_MODELS.POWERFUL,
@@ -475,7 +481,11 @@ DIFF GENERATION REQUIREMENTS:
 BOILERPLATE CONTEXT:
 ${JSON.stringify(FARCASTER_BOILERPLATE_CONTEXT, null, 2)}
 
-CRITICAL: You MUST return ONLY valid JSON. No explanations, no text, no markdown, no code fences.
+CRITICAL: Return ONLY valid JSON. Surround the JSON with EXACT markers:
+__START_JSON__
+{ ... your JSON ... }
+__END_JSON__
+Nothing else before/after the markers. Do not include any explanatory text, comments, or additional content outside the JSON markers.
 
 OUTPUT FORMAT (JSON ONLY):
 {
@@ -531,7 +541,7 @@ OUTPUT FORMAT (JSON ONLY):
 }
 
 CRITICAL REQUIREMENTS:
-- Every patch MUST have: filename, operation, purpose, changes
+- Every patch MUST have: filename, operation, purpose, changes, diffHunks, unifiedDiff
 - filename: string (file path)
 - operation: "create" | "modify" | "delete"
 - purpose: string (high-level description of what this file change accomplishes)
@@ -543,6 +553,8 @@ CRITICAL REQUIREMENTS:
 - location: string (where in the file this change should happen)
 - dependencies: array of what this change depends on (hooks, components, etc.)
 - contractInteraction: object with type and functions if blockchain interaction needed
+- diffHunks: array of diff hunk objects with oldStart, oldLines, newStart, newLines, lines
+- unifiedDiff: string containing the complete unified diff format for the file
 - do not change wagmi.ts file it has everything you need
 - do not edit package.json or add any extra dependencies to package.json if not needed must be minimal
 
@@ -571,6 +583,7 @@ PLANNING RULES:
 EXAMPLE PLANNING OUTPUT:
 User wants to "Add a voting feature"
 Correct Stage 2 Output:
+__START_JSON__
 {
   "patches": [
     {
@@ -612,8 +625,9 @@ Correct Stage 2 Output:
     "Maintain existing tab structure and mobile-first design"
   ]
 }
+__END_JSON__
 
-REMEMBER: Return ONLY the JSON object above. No other text, no explanations, no markdown formatting.
+REMEMBER: Return ONLY the JSON object above surrounded by __START_JSON__ and __END_JSON__ markers. No other text, no explanations, no markdown formatting.
 `;
 }
 
@@ -669,10 +683,15 @@ FARCASTER REQUIREMENTS FOR MAIN PAGE:
 - The app automatically works in both Farcaster miniapp and browser environments
 -The Mini App SDK exposes an EIP-1193 Ethereum Provider API at sdk.wallet.getEthereumProvider()
 
-CRITICAL: You MUST return ONLY valid JSON. No explanations, no text, no markdown, no code fences.
+CRITICAL: Return ONLY valid JSON. Surround the JSON with EXACT markers:
+__START_JSON__
+{ ... your JSON ... }
+__END_JSON__
+Nothing else before/after the markers. Do not include any explanatory text, comments, or additional content outside the JSON markers.
 
 OUTPUT FORMAT:
 Generate a JSON array of file diffs and complete files:
+__START_JSON__
 [
   {
     "filename": "path/to/file",
@@ -694,6 +713,7 @@ Generate a JSON array of file diffs and complete files:
     "content": "complete file content for new files"
   }
 ]
+__END_JSON__
 
 CODE GENERATION RULES:
 - For existing files: Modify the current file content based on the patch plan
@@ -716,7 +736,7 @@ CODE GENERATION RULES:
 - Return valid JSON array only
 - NO EXPLANATIONS, NO TEXT, ONLY JSON
 
-REMEMBER: Return ONLY the JSON array above. No other text, no explanations, no markdown formatting.
+REMEMBER: Return ONLY the JSON array above surrounded by __START_JSON__ and __END_JSON__ markers. No other text, no explanations, no markdown formatting.
 `;
 }
 
@@ -748,9 +768,14 @@ TASK: Fix critical errors that would prevent the project from running. Generate 
 BOILERPLATE CONTEXT:
 ${JSON.stringify(FARCASTER_BOILERPLATE_CONTEXT, null, 2)}
 
-CRITICAL: Return ONLY a JSON array. No markdown, no code blocks, no explanations.
+CRITICAL: Return ONLY a JSON array. Surround the JSON with EXACT markers:
+__START_JSON__
+{ ... your JSON ... }
+__END_JSON__
+Nothing else before/after the markers. Do not include any explanatory text, comments, or additional content outside the JSON markers.
 
 OUTPUT FORMAT:
+__START_JSON__
 [
   {
     "filename": "EXACT_SAME_FILENAME",
@@ -767,6 +792,7 @@ OUTPUT FORMAT:
     ]
   }
 ]
+__END_JSON__
 
 CRITICAL FIXES ONLY:
 
@@ -792,7 +818,7 @@ RULES:
 - Return ONLY the JSON array
 - NO EXPLANATIONS, NO TEXT, NO CODE BLOCKS
 
-CRITICAL: Return ONLY the JSON array above. No other text.
+CRITICAL: Return ONLY the JSON array above surrounded by __START_JSON__ and __END_JSON__ markers. No other text, comments, or explanatory content outside the markers.
 `;
 }
 
@@ -1247,109 +1273,16 @@ export async function executeMultiStagePipeline(
 
     let patchPlan: PatchPlan;
     
-    // Robust JSON parsing with multiple fallback strategies
-    const parseJsonWithFallbacks = (response: string): PatchPlan => {
-      // First try to parse the response directly
-      try {
-        return JSON.parse(response);
-      } catch (error) {
-        console.error('Direct JSON parsing failed, trying fallbacks...');
-        
-        // Fallback 1: Try to extract JSON from the response and fix common issues
-        try {
-          const jsonStart = response.indexOf('{');
-          const jsonEnd = response.lastIndexOf('}');
-          if (jsonStart >= 0 && jsonEnd > jsonStart) {
-            let jsonContent = response.substring(jsonStart, jsonEnd + 1);
-            
-            // More aggressive JSON sanitization
-            jsonContent = jsonContent
-              // Fix unescaped quotes in strings (but not in JSON structure)
-              .replace(/(?<!\\)"(?![,}\]])(?![^"]*"[^"]*:)/g, '\\"')
-              // Fix unescaped backslashes
-              .replace(/(?<!\\)\\(?![\\"\/bfnrt])/g, '\\\\')
-              // Fix unescaped newlines in strings
-              .replace(/(?<!\\)\n/g, '\\n')
-              // Fix unescaped carriage returns
-              .replace(/(?<!\\)\r/g, '\\r')
-              // Fix unescaped tabs
-              .replace(/(?<!\\)\t/g, '\\t');
-            
-            return JSON.parse(jsonContent);
-          }
-        } catch (fallbackError) {
-          console.error('JSON extraction fallback failed:', fallbackError);
-        }
-        
-        // Fallback 2: Try to extract just the patches array with better regex
-        try {
-          // More robust regex to find patches array
-          const patchesMatch = response.match(/"patches"\s*:\s*\[([\s\S]*?)\](?=\s*[,}])/);
-          if (patchesMatch) {
-            let patchesContent = patchesMatch[1];
-            
-            // Sanitize the patches content
-            patchesContent = patchesContent
-              .replace(/(?<!\\)"(?![,}\]])(?![^"]*"[^"]*:)/g, '\\"')
-              .replace(/(?<!\\)\\(?![\\"\/bfnrt])/g, '\\\\')
-              .replace(/(?<!\\)\n/g, '\\n')
-              .replace(/(?<!\\)\r/g, '\\r')
-              .replace(/(?<!\\)\t/g, '\\t');
-            
-            const patchesJson = `{"patches": [${patchesContent}]}`;
-            return JSON.parse(patchesJson);
-          }
-        } catch (patchesError) {
-          console.error('Patches extraction fallback failed:', patchesError);
-        }
-        
-        // Fallback 3: Try to extract individual patch objects
-        try {
-          const patchMatches = response.match(/\{[^{}]*"filename"[^{}]*\}/g);
-          if (patchMatches && patchMatches.length > 0) {
-            const sanitizedPatches = patchMatches.map(patch => {
-              return patch
-                .replace(/(?<!\\)"(?![,}\]])(?![^"]*"[^"]*:)/g, '\\"')
-                .replace(/(?<!\\)\\(?![\\"\/bfnrt])/g, '\\\\')
-                .replace(/(?<!\\)\n/g, '\\n')
-                .replace(/(?<!\\)\r/g, '\\r')
-                .replace(/(?<!\\)\t/g, '\\t');
-            });
-            
-            const patchesJson = `{"patches": [${sanitizedPatches.join(',')}]}`;
-            return JSON.parse(patchesJson);
-          }
-        } catch (patchObjectsError) {
-          console.error('Patch objects extraction fallback failed:', patchObjectsError);
-        }
-        
-        // Ultimate fallback: create a minimal valid patch plan with diff hunks
-        console.log('All fallbacks failed, creating minimal patch plan...');
-        return {
-          patches: [{
-            filename: "src/app/page.tsx",
-            operation: "modify",
-            purpose: "Update main page for the requested miniapp",
-            changes: [{
-              type: "replace",
-              target: "content",
-              description: "Replace page content with the requested functionality",
-              location: "main content area"
-            }],
-            diffHunks: [{
-              oldStart: 1,
-              oldLines: 1,
-              newStart: 1,
-              newLines: 1,
-              lines: ["-// Original content", "+// Updated content"]
-            }],
-            unifiedDiff: "@@ -1,1 +1,1 @@\n-// Original content\n+// Updated content"
-          }]
-        };
-      }
-    };
+    // Use the extracted parser utility
+    patchPlan = parseStage2PatchResponse(patchResponse);
+
+    // Check for potential truncation by looking for incomplete JSON
+    const isPotentiallyTruncated = isResponseTruncated(patchResponse);
     
-    patchPlan = parseJsonWithFallbacks(patchResponse);
+    if (isPotentiallyTruncated) {
+      console.warn("⚠️ Stage 2 response appears to be truncated. Retry logic is handled in callClaudeWithLogging.");
+      console.warn("Response ends with:", patchResponse.slice(-100));
+    }
 
     // Validate patch plan structure
     if (!patchPlan.patches || !Array.isArray(patchPlan.patches)) {
@@ -1505,8 +1438,10 @@ export async function executeMultiStagePipeline(
     console.log("Raw Response:", codeResponse.substring(0, 500) + "...");
 
     let generatedFiles: { filename: string; content?: string; unifiedDiff?: string; operation?: string }[];
+    
+    // Use the extracted parser utility
     try {
-      generatedFiles = JSON.parse(codeResponse);
+      generatedFiles = parseStage3CodeResponse(codeResponse);
     } catch (error) {
       console.error("❌ Failed to parse Stage 3 response as JSON:");
       console.error("Raw response:", codeResponse);
@@ -1785,27 +1720,12 @@ export async function executeMultiStagePipeline(
         "STAGE_4_VALIDATOR"
       );
 
-      // Parse rewritten files with markdown handling
+      // Parse rewritten files with robust JSON parsing
       let rewrittenFilesParsed: { filename: string; content: string }[];
+      
+      // Use the extracted parser utility
       try {
-        // Clean the response to remove markdown formatting
-        let cleanedResponse = rewrittenFiles.trim();
-
-        // Remove markdown code blocks if present
-        if (cleanedResponse.startsWith("```json")) {
-          cleanedResponse = cleanedResponse.replace(/^```json\s*/, "");
-        }
-        if (cleanedResponse.startsWith("```")) {
-          cleanedResponse = cleanedResponse.replace(/^```\s*/, "");
-        }
-        if (cleanedResponse.endsWith("```")) {
-          cleanedResponse = cleanedResponse.replace(/\s*```$/, "");
-        }
-
-        // Remove any leading/trailing whitespace
-        cleanedResponse = cleanedResponse.trim();
-
-        rewrittenFilesParsed = JSON.parse(cleanedResponse);
+        rewrittenFilesParsed = parseStage4ValidatorResponse(rewrittenFiles);
       } catch (error) {
         console.error("❌ Failed to parse rewritten files as JSON:");
         console.error("Raw response:", rewrittenFiles.substring(0, 500));
@@ -1935,8 +1855,14 @@ export async function executeMultiStagePipeline(
 
     // Convert generated files to required format with content field
     // First, separate files with diffs from files with content
-    const filesWithDiffs = generatedFiles.filter(file => file.unifiedDiff && !file.content);
-    const filesWithContent = generatedFiles.filter(file => file.content);
+    const filesWithDiffs = generatedFiles.filter(file => file.operation === 'modify' && file.unifiedDiff);
+    const filesWithContent = generatedFiles.filter(file => file.operation === 'create' && file.content);
+    
+    // Log the separation for debugging
+    console.log(`📊 File processing breakdown:`);
+    console.log(`  Files with diffs: ${filesWithDiffs.length}`);
+    console.log(`  Files with content: ${filesWithContent.length}`);
+    console.log(`  Total generated files: ${generatedFiles.length}`);
     
     // Apply diffs to original files using the robust applyDiffsToFiles function
     let processedFiles: { filename: string; content: string }[] = [];
@@ -1988,38 +1914,29 @@ export async function executeMultiStagePipeline(
               });
             }
           } else {
-            // For new files, extract content from the diff
-            console.log(`📝 Creating new file ${file.filename} from diff content`);
-            try {
-              // Extract the content from the unified diff
-              const diffLines = file.unifiedDiff!.split('\n');
-              const contentLines = diffLines
-                .filter(line => line.startsWith('+') && !line.startsWith('+++'))
-                .map(line => line.substring(1))
-                .join('\n');
-              
-              processedFiles.push({
-                filename: file.filename,
-                content: contentLines
-              });
-            } catch (extractError) {
-              console.error(`❌ Failed to extract content from diff for ${file.filename}:`, extractError);
-              // Use empty content as fallback
-              processedFiles.push({
-                filename: file.filename,
-                content: ''
-              });
-            }
+            // This shouldn't happen with the new filtering logic
+            console.warn(`⚠️ File ${file.filename} not found in current files but has operation: ${file.operation || 'unknown'}`);
           }
         });
       }
     }
     
-    // Add files that already have content
-    processedFiles.push(...filesWithContent.map(file => ({
-      filename: file.filename,
-      content: file.content!
-    })));
+    // Add files that already have content (including create operations)
+    if (filesWithContent.length > 0) {
+      console.log(`📝 Adding ${filesWithContent.length} files with content...`);
+      filesWithContent.forEach(file => {
+        console.log(`  ✅ Adding file: ${file.filename} (${file.content!.length} chars)`);
+        processedFiles.push({
+          filename: file.filename,
+          content: file.content!
+        });
+      });
+    }
+    
+    console.log(`📊 Final processed files: ${processedFiles.length}`);
+    processedFiles.forEach(file => {
+      console.log(`  📄 ${file.filename} (${file.content.length} chars)`);
+    });
     
     return processedFiles;
   } catch (error) {
