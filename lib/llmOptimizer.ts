@@ -2,7 +2,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { applyDiffToContent } from './diffUtils';
+import { applyDiffToContent, parseUnifiedDiff } from './diffUtils';
 import { applyDiffsToFiles } from './diffBasedPipeline';
 import { getDiffStatistics } from './enhancedPipeline';
 import { 
@@ -74,7 +74,7 @@ export const STAGE_MODEL_CONFIG = {
   STAGE_2_PATCH_PLANNER: {
     model: ANTHROPIC_MODELS.BALANCED,
     fallbackModel: ANTHROPIC_MODELS.POWERFUL, // Use latest Sonnet if regular Sonnet is overloaded
-    maxTokens: 12000,
+    maxTokens: 4000,
     temperature: 0,
     reason: "Complex planning task, needs good reasoning and more tokens for detailed diffs",
   },
@@ -457,26 +457,25 @@ export interface FileDiff {
 
 export function getStage2PatchPlannerPrompt(
   intentSpec: IntentSpec,
-  currentFiles: { filename: string; content: string }[]
+  currentFiles: { filename: string; content: string }[],
+  isInitialGeneration: boolean = false
 ): string {
-  return `
-ROLE: Patch Planner for Farcaster Miniapp
-
-
+  if (isInitialGeneration) {
+    return `
+ROLE: Patch Planner for Farcaster Miniapp - Initial Generation
 
 INTENT: ${JSON.stringify(intentSpec, null, 2)}
 
-CURRENT FILES:
+CURRENT FILES (Boilerplate):
 ${currentFiles.map((f) => `---${f.filename}---\n${f.content}`).join("\n\n")}
 
-TASK: Plan detailed file changes to implement the intent and generate unified diff hunks for surgical changes
+TASK: Plan detailed file changes to implement the intent for initial project generation
 
-DIFF GENERATION REQUIREMENTS:
-- For each file modification, generate unified diff hunks in the format: @@ -oldStart,oldLines +newStart,newLines @@
-- Include context lines (unchanged lines) around changes for better accuracy
-- Use + prefix for added lines, - prefix for removed lines, space for context lines
-- Generate minimal, surgical diffs rather than full file rewrites
-- Focus on precise line-by-line changes to preserve existing code structure
+INITIAL GENERATION APPROACH:
+- Focus on complete file planning rather than surgical diffs
+- Plan full file modifications since we're starting from boilerplate
+- Generate comprehensive change descriptions for complete implementation
+- No need for diff hunks or unified diffs - Stage 3 will generate complete files
 
 BOILERPLATE CONTEXT:
 ${JSON.stringify(FARCASTER_BOILERPLATE_CONTEXT, null, 2)}
@@ -487,7 +486,7 @@ __START_JSON__
 __END_JSON__
 Nothing else before/after the markers. Do not include any explanatory text, comments, or additional content outside the JSON markers.
 
-OUTPUT FORMAT (JSON ONLY):
+OUTPUT FORMAT (JSON ONLY) - INITIAL GENERATION:
 {
   "patches": [
     {
@@ -512,24 +511,7 @@ OUTPUT FORMAT (JSON ONLY):
             "functions": ["claimTokens"]
           }
         }
-      ],
-      "diffHunks": [
-        {
-          "oldStart": 1,
-          "oldLines": 3,
-          "newStart": 1,
-          "newLines": 6,
-          "lines": [
-            " import { ConnectWallet } from '@/components/wallet/ConnectWallet';",
-            " import { Tabs } from '@/components/ui/Tabs';",
-            "+import { useReadContract, useWriteContract, useWaitForTransactionReceipt } from 'wagmi';",
-            "+import { useAccount } from 'wagmi';",
-            " import { useUser } from '@/hooks';",
-            " "
-          ]
-        }
-      ],
-      "unifiedDiff": "@@ -1,3 +1,6 @@\n import { ConnectWallet } from '@/components/wallet/ConnectWallet';\n import { Tabs } from '@/components/ui/Tabs';\n+import { useReadContract, useWriteContract, useWaitForTransactionReceipt } from 'wagmi';\n+import { useAccount } from 'wagmi';\n import { useUser } from '@/hooks';\n \n@@ -40,10 +43,25 @@\n   const tabs = [\n     {\n       id: 'tab1',\n       title: 'Tab1',\n-      content: (\n-        <div className=\"space-y-4\">\n-          <h1>Tab 1 Content</h1>\n-        </div>\n-      )\n+      content: (\n+        <div className=\"space-y-4\">\n+          <h1>Token Airdrop</h1>\n+          <p>Claim your eligible tokens</p>\n+          <button onClick={handleClaim}>Claim Tokens</button>\n+        </div>\n+      )\n     },\n"
+      ]
     }
   ],
   "implementationNotes": [
@@ -540,8 +522,8 @@ OUTPUT FORMAT (JSON ONLY):
   ]
 }
 
-CRITICAL REQUIREMENTS:
-- Every patch MUST have: filename, operation, purpose, changes, diffHunks, unifiedDiff
+CRITICAL REQUIREMENTS - INITIAL GENERATION:
+- Every patch MUST have: filename, operation, purpose, changes
 - filename: string (file path)
 - operation: "create" | "modify" | "delete"
 - purpose: string (high-level description of what this file change accomplishes)
@@ -553,8 +535,6 @@ CRITICAL REQUIREMENTS:
 - location: string (where in the file this change should happen)
 - dependencies: array of what this change depends on (hooks, components, etc.)
 - contractInteraction: object with type and functions if blockchain interaction needed
-- diffHunks: array of diff hunk objects with oldStart, oldLines, newStart, newLines, lines
-- unifiedDiff: string containing the complete unified diff format for the file
 - do not change wagmi.ts file it has everything you need
 - do not edit package.json or add any extra dependencies to package.json if not needed must be minimal
 
@@ -629,6 +609,134 @@ __END_JSON__
 
 REMEMBER: Return ONLY the JSON object above surrounded by __START_JSON__ and __END_JSON__ markers. No other text, no explanations, no markdown formatting.
 `;
+  } else {
+    // Follow-up changes - use diff-based approach
+    return `
+ROLE: Patch Planner for Farcaster Miniapp - Follow-up Changes
+
+INTENT: ${JSON.stringify(intentSpec, null, 2)}
+
+CURRENT FILES:
+${currentFiles.map((f) => `---${f.filename}---\n${f.content}`).join("\n\n")}
+
+TASK: Plan detailed file changes to implement the intent and generate unified diff hunks for surgical changes
+
+DIFF GENERATION REQUIREMENTS:
+- For each file modification, generate unified diff hunks in the format: @@ -oldStart,oldLines +newStart,newLines @@
+- Include context lines (unchanged lines) around changes for better accuracy
+- Use + prefix for added lines, - prefix for removed lines, space for context lines
+- Generate minimal, surgical diffs rather than full file rewrites
+- Focus on precise line-by-line changes to preserve existing code structure
+- CRITICAL: Always preserve the 'use client'; directive at the very top of React component files
+- When adding imports, place them AFTER the 'use client'; directive but BEFORE other imports
+
+BOILERPLATE CONTEXT:
+${JSON.stringify(FARCASTER_BOILERPLATE_CONTEXT, null, 2)}
+
+CRITICAL: Return ONLY valid JSON. Surround the JSON with EXACT markers:
+__START_JSON__
+{ ... your JSON ... }
+__END_JSON__
+Nothing else before/after the markers. Do not include any explanatory text, comments, or additional content outside the JSON markers.
+
+OUTPUT FORMAT (JSON ONLY) - FOLLOW-UP CHANGES:
+{
+  "patches": [
+    {
+      "filename": "src/app/page.tsx",
+      "operation": "modify",
+      "purpose": "Add token airdrop functionality to Tab1",
+      "changes": [
+        {
+          "type": "add",
+          "target": "imports",
+          "description": "Import wagmi hooks for contract interaction (useReadContract, useWriteContract, useWaitForTransactionReceipt)",
+          "location": "at the top with other imports"
+        },
+        {
+          "type": "replace",
+          "target": "tab-content",
+          "description": "Replace Tab1 content with airdrop interface including claim button, eligible tokens display, and transaction status",
+          "location": "inside Tab1 content area",
+          "dependencies": ["useAccount hook from wagmi for wallet address", "wagmi hooks for contract calls"],
+          "contractInteraction": {
+            "type": "write",
+            "functions": ["claimTokens"]
+          }
+        }
+      ],
+      "diffHunks": [
+        {
+          "oldStart": 1,
+          "oldLines": 3,
+          "newStart": 1,
+          "newLines": 6,
+          "lines": [
+            "'use client';",
+            "",
+            " import { ConnectWallet } from '@/components/wallet/ConnectWallet';",
+            " import { Tabs } from '@/components/ui/Tabs';",
+            "+import { useReadContract, useWriteContract, useWaitForTransactionReceipt } from 'wagmi';",
+            "+import { useAccount } from 'wagmi';",
+            " import { useUser } from '@/hooks';",
+            " "
+          ]
+        }
+      ],
+      "unifiedDiff": "@@ -1,3 +1,6 @@\n'use client';\n\n import { ConnectWallet } from '@/components/wallet/ConnectWallet';\n import { Tabs } from '@/components/ui/Tabs';\n+import { useReadContract, useWriteContract, useWaitForTransactionReceipt } from 'wagmi';\n+import { useAccount } from 'wagmi';\n import { useUser } from '@/hooks';\n \n@@ -40,10 +43,25 @@\n   const tabs = [\n     {\n       id: 'tab1',\n       title: 'Tab1',\n-      content: (\n-        <div className=\"space-y-4\">\n-          <h1>Tab 1 Content</h1>\n-        </div>\n-      )\n+      content: (\n+        <div className=\"space-y-4\">\n+          <h1>Token Airdrop</h1>\n+          <p>Claim your eligible tokens</p>\n+          <button onClick={handleClaim}>Claim Tokens</button>\n+        </div>\n+      )\n     },\n"
+    }
+  ],
+  "implementationNotes": [
+    "Use useAccount hook from wagmi to get connected wallet address for contract interactions",
+    "Display loading state during transaction",
+    "Show success/error states for claim attempts",
+    "Use existing Tabs component structure"
+  ]
+}
+
+CRITICAL REQUIREMENTS - FOLLOW-UP CHANGES:
+- Every patch MUST have: filename, operation, purpose, changes, diffHunks, unifiedDiff
+- filename: string (file path)
+- operation: "create" | "modify" | "delete"
+- purpose: string (high-level description of what this file change accomplishes)
+- changes: array of change objects
+- Each change MUST have: type, target, description
+- type: "add" | "replace" | "remove"
+- target: string (e.g., "imports", "tab-content", "function", "component")
+- description: string (detailed description of what needs to be implemented - NO ACTUAL CODE)
+- location: string (where in the file this change should happen)
+- dependencies: array of what this change depends on (hooks, components, etc.)
+- contractInteraction: object with type and functions if blockchain interaction needed
+- diffHunks: array of diff hunk objects with oldStart, oldLines, newStart, newLines, lines
+- unifiedDiff: string containing the complete unified diff format for the file
+- do not change wagmi.ts file it has everything you need
+- do not edit package.json or add any extra dependencies to package.json if not needed must be minimal
+
+PLANNING RULES:
+- Plan changes for each file that needs modification
+- The boilerplate is on nextjs app router with src directory structure so think for the code in that structure only
+- ALWAYS use useUser hook from @/hooks for user data like username, fid, displayName, pfpUrl, etc. and always take address from useAccount hook from wagmi
+- ALWAYS use Tabs component from @/components/ui/Tabs for navigation
+- ALWAYS target tab content areas for feature implementation (Tab1, Tab2, etc.)
+- Specify exact operations (create/modify/delete) and clear purposes
+- Target specific sections with detailed descriptions:
+  * "imports" - what imports to add/modify
+  * "tab-content" - which tab content to modify and how
+  * "function" - what functions to add/modify
+  * "component" - what UI components to add
+  * "state" - what state management to add
+- Describe implementation requirements without writing actual code
+- Include dependencies and contract interactions where relevant
+- Ensure all required files are covered with detailed change descriptions
+- If blockchain functionality is requested, specify contract interaction types and functions
+- Provide implementation notes for Stage 3 guidance
+- Return valid JSON only
+- Every patch must have a valid changes array with descriptions
+- NO ACTUAL CODE, NO EXPLANATIONS, ONLY PLANNING JSON
+
+REMEMBER: Return ONLY the JSON object above surrounded by __START_JSON__ and __END_JSON__ markers. No other text, no explanations, no markdown formatting.
+`;
+  }
 }
 
 // Stage 3: Code Generator Types and Prompts
@@ -642,10 +750,89 @@ REMEMBER: Return ONLY the JSON object above surrounded by __START_JSON__ and __E
 export function getStage3CodeGeneratorPrompt(
   patchPlan: PatchPlan,
   intentSpec: IntentSpec,
-  currentFiles: { filename: string; content: string }[]
+  currentFiles: { filename: string; content: string }[],
+  isInitialGeneration: boolean = false
 ): string {
-  return `
-ROLE: Code Generator for Farcaster Miniapp as single page app
+  if (isInitialGeneration) {
+    return `
+ROLE: Code Generator for Farcaster Miniapp - Initial Generation
+
+INTENT: ${JSON.stringify(intentSpec, null, 2)}
+
+DETAILED PATCH PLAN: ${JSON.stringify(patchPlan, null, 2)}
+
+CURRENT FILES (Boilerplate):
+${currentFiles.map((f) => `---${f.filename}---\n${f.content}`).join("\n\n")}
+
+BOILERPLATE CONTEXT:
+${JSON.stringify(FARCASTER_BOILERPLATE_CONTEXT, null, 2)}
+
+TASK: Generate complete file contents based on the detailed patch plan for initial project generation
+
+INITIAL GENERATION APPROACH:
+- Generate complete file contents rather than diffs
+- Focus on implementing the full functionality described in the patch plan
+- Create comprehensive, working code files
+- No need for diff hunks or unified diffs - generate complete files
+
+IMPLEMENTATION GUIDANCE FROM PATCH PLAN:
+- Follow the "purpose" field for each file to understand the overall goal
+- Use the "description" field in each change to understand exactly what to implement
+- Use the "location" field to know where in the file to place the code
+- Use the "dependencies" field to ensure all required imports and hooks are included
+- Use the "contractInteraction" field to implement blockchain functionality correctly
+- Follow the "implementationNotes" for overall implementation approach
+
+FARCASTER REQUIREMENTS FOR MAIN PAGE:
+- Mobile-first design (~375px width) with tab-based layout
+- Single page app structure (all content in tab components within src/app/page.tsx)
+- For contract interactions use wagmi hooks with address from useAccount hook from wagmi
+- Do not change wagmi.ts file - it has everything you need
+- Do not edit package.json unless absolutely necessary
+- The app automatically works in both Farcaster miniapp and browser environments
+- The Mini App SDK exposes an EIP-1193 Ethereum Provider API at sdk.wallet.getEthereumProvider()
+
+CRITICAL: Return ONLY valid JSON. Surround the JSON with EXACT markers:
+__START_JSON__
+{ ... your JSON ... }
+__END_JSON__
+Nothing else before/after the markers. Do not include any explanatory text, comments, or additional content outside the JSON markers.
+
+OUTPUT FORMAT - INITIAL GENERATION:
+Generate a JSON array of complete files:
+__START_JSON__
+[
+  {
+    "filename": "path/to/file",
+    "content": "complete file content"
+  }
+]
+__END_JSON__
+
+CODE GENERATION RULES - INITIAL GENERATION:
+- Generate complete file contents based on patch plan descriptions
+- Use useUser hook from @/hooks for user data: const { username, fid, isMiniApp, isLoading } = useUser()
+- Use Tabs component from @/components/ui/Tabs for navigation
+- Follow patch plan "purpose" and "description" fields exactly
+- Implement code in the exact "location" specified in the patch plan
+- Include all "dependencies" listed in the patch plan
+- Implement "contractInteraction" functionality when specified
+- Follow "implementationNotes" for overall approach
+- Include all required imports based on dependencies
+- Prefer neutral colors (grays, whites, blacks) with subtle accents
+- Use consistent spacing, typography, and visual hierarchy
+- Ensure good contrast and accessibility
+- Use subtle shadows and borders for depth when appropriate
+- If blockchain functionality is requested, include smart contract code in solidity and have a placeholder for the contract address and abi
+- Return valid JSON array only
+- NO EXPLANATIONS, NO TEXT, ONLY JSON
+
+REMEMBER: Return ONLY the JSON array above surrounded by __START_JSON__ and __END_JSON__ markers. No other text, no explanations, no markdown formatting.
+`;
+  } else {
+    // Follow-up changes - use diff-based approach
+    return `
+ROLE: Code Generator for Farcaster Miniapp - Follow-up Changes
 
 INTENT: ${JSON.stringify(intentSpec, null, 2)}
 
@@ -666,6 +853,14 @@ DIFF-BASED APPROACH:
 - For new files, generate complete file content
 - Validate that diffs are minimal and precise
 
+CRITICAL LINE NUMBER CALCULATION:
+- ALWAYS calculate line numbers based on the ACTUAL current file content provided above
+- Count lines in the current file to determine correct oldStart, oldLines, newStart, newLines
+- Use context lines (unchanged lines) to anchor your diffs for better accuracy
+- Include 2-3 context lines before and after changes for better matching
+- Verify line numbers by checking the actual file structure in CURRENT FILES section
+- DO NOT use example line numbers from this prompt - calculate them from actual content
+
 IMPLEMENTATION GUIDANCE FROM PATCH PLAN:
 - Follow the "purpose" field for each file to understand the overall goal
 - Use the "description" field in each change to understand exactly what to implement
@@ -681,7 +876,7 @@ FARCASTER REQUIREMENTS FOR MAIN PAGE:
 - Do not change wagmi.ts file - it has everything you need
 - Do not edit package.json unless absolutely necessary
 - The app automatically works in both Farcaster miniapp and browser environments
--The Mini App SDK exposes an EIP-1193 Ethereum Provider API at sdk.wallet.getEthereumProvider()
+- The Mini App SDK exposes an EIP-1193 Ethereum Provider API at sdk.wallet.getEthereumProvider()
 
 CRITICAL: Return ONLY valid JSON. Surround the JSON with EXACT markers:
 __START_JSON__
@@ -689,21 +884,21 @@ __START_JSON__
 __END_JSON__
 Nothing else before/after the markers. Do not include any explanatory text, comments, or additional content outside the JSON markers.
 
-OUTPUT FORMAT:
+OUTPUT FORMAT - FOLLOW-UP CHANGES:
 Generate a JSON array of file diffs and complete files:
 __START_JSON__
 [
   {
     "filename": "path/to/file",
     "operation": "modify",
-    "unifiedDiff": "@@ -1,3 +1,6 @@\n import { ConnectWallet } from '@/components/wallet/ConnectWallet';\n import { Tabs } from '@/components/ui/Tabs';\n+import { useReadContract } from 'wagmi';\n+import { useAccount } from 'wagmi';\n import { useUser } from '@/hooks';\n ",
+    "unifiedDiff": "@@ -X,Y +X,Z @@\n context line before\n-old line to remove\n+new line to add\n context line after",
     "diffHunks": [
       {
-        "oldStart": 1,
-        "oldLines": 3,
-        "newStart": 1,
-        "newLines": 6,
-        "lines": [" import { ConnectWallet } from '@/components/wallet/ConnectWallet';", " import { Tabs } from '@/components/ui/Tabs';", "+import { useReadContract } from 'wagmi';", "+import { useAccount } from 'wagmi';", " import { useUser } from '@/hooks';", " "]
+        "oldStart": X,
+        "oldLines": Y,
+        "newStart": X,
+        "newLines": Z,
+        "lines": [" context line before", "-old line to remove", "+new line to add", " context line after"]
       }
     ]
   },
@@ -715,7 +910,7 @@ __START_JSON__
 ]
 __END_JSON__
 
-CODE GENERATION RULES:
+CODE GENERATION RULES - FOLLOW-UP CHANGES:
 - For existing files: Modify the current file content based on the patch plan
 - For new files: Generate complete file contents based on patch plan descriptions
 - Use useUser hook from @/hooks for user data: const { username, fid, isMiniApp, isLoading } = useUser()
@@ -738,6 +933,7 @@ CODE GENERATION RULES:
 
 REMEMBER: Return ONLY the JSON array above surrounded by __START_JSON__ and __END_JSON__ markers. No other text, no explanations, no markdown formatting.
 `;
+  }
 }
 
 // Stage 4: Validator Types and Prompts
@@ -752,7 +948,8 @@ export interface ValidationResult {
 
 export function getStage4ValidatorPrompt(
   generatedFiles: { filename: string; content: string }[],
-  errors: string[]
+  errors: string[],
+  isInitialGeneration: boolean = false
 ): string {
   return `
 ROLE: Code Validator for Next.js 15 + TypeScript + React
@@ -763,7 +960,7 @@ ${errors.join("\n")}
 FILES TO REGENERATE:
 ${generatedFiles.map((f) => `---${f.filename}---\n${f.content}`).join("\n\n")}
 
-TASK: Fix critical errors that would prevent the project from running. Generate unified diff patches for surgical fixes rather than rewriting entire files.
+TASK: Fix critical errors that would prevent the project from running. ${isInitialGeneration ? 'Generate complete corrected files for initial project generation.' : 'Generate unified diff patches for surgical fixes rather than rewriting entire files.'}
 
 BOILERPLATE CONTEXT:
 ${JSON.stringify(FARCASTER_BOILERPLATE_CONTEXT, null, 2)}
@@ -775,6 +972,16 @@ __END_JSON__
 Nothing else before/after the markers. Do not include any explanatory text, comments, or additional content outside the JSON markers.
 
 OUTPUT FORMAT:
+${isInitialGeneration ? `
+__START_JSON__
+[
+  {
+    "filename": "EXACT_SAME_FILENAME",
+    "content": "Complete corrected file content with all fixes applied"
+  }
+]
+__END_JSON__
+` : `
 __START_JSON__
 [
   {
@@ -793,6 +1000,7 @@ __START_JSON__
   }
 ]
 __END_JSON__
+`}
 
 CRITICAL FIXES ONLY:
 
@@ -813,7 +1021,8 @@ CRITICAL FIXES ONLY:
 
 RULES:
 - Return EXACTLY the same filenames provided
-- DO NOT create new files
+- Generate surgical diff patches for critical fixes
+- DO NOT create new files beyond those provided
 - DO NOT add markdown formatting
 - Return ONLY the JSON array
 - NO EXPLANATIONS, NO TEXT, NO CODE BLOCKS
@@ -1023,10 +1232,40 @@ function validateClientDirectives(
   const missingClientDirective: { file: string; reason: string }[] = [];
 
   files.forEach((file) => {
-    // Get content to analyze - prefer content for create operations, unifiedDiff for modify
-    const contentToAnalyze = file.operation === 'create' ? file.content : 
-                            file.operation === 'modify' ? file.unifiedDiff : 
-                            file.content || file.unifiedDiff;
+    // For modify operations, we should analyze the actual file content, not the diff
+    // The diff will be applied to create the final content, so we need to simulate that
+    let contentToAnalyze: string | undefined;
+    
+    if (file.operation === 'create' && file.content) {
+      contentToAnalyze = file.content;
+    } else if (file.operation === 'modify' && file.unifiedDiff) {
+      // For modify operations, we need to analyze the diff to see what the final content would be
+      // Extract the added lines from the diff to check for client-side features
+      const addedLines = file.unifiedDiff
+        .split('\n')
+        .filter(line => line.startsWith('+') && !line.startsWith('+++'))
+        .map(line => line.substring(1)) // Remove the + prefix
+        .join('\n');
+      
+      // If the diff contains client-side features, we need to check if 'use client' is present
+      const usesClientHooks = /useState|useEffect/.test(addedLines);
+      const usesEventHandlers = /onClick|onChange/.test(addedLines);
+      
+      if (usesClientHooks || usesEventHandlers) {
+        // Check if the diff includes 'use client' directive
+        const hasClientDirectiveInDiff = /^"use client"/m.test(addedLines);
+        
+        if (!hasClientDirectiveInDiff) {
+          missingClientDirective.push({
+            file: file.filename,
+            reason: "Uses client-side features but missing 'use client' directive in diff",
+          });
+        }
+      }
+      return; // Skip the rest of the analysis for modify operations
+    } else {
+      contentToAnalyze = file.content || file.unifiedDiff;
+    }
     
     if (!contentToAnalyze) return; // Skip if no content to analyze
     
@@ -1056,23 +1295,51 @@ function validateTypeScriptIssues(
   const typeErrors: { file: string; error: string }[] = [];
 
   files.forEach((file) => {
-    // Get content to analyze - prefer content for create operations, unifiedDiff for modify
-    const content = file.operation === 'create' ? file.content : 
-                   file.operation === 'modify' ? file.unifiedDiff : 
-                   file.content || file.unifiedDiff;
+    // For modify operations, we should analyze the actual file content, not the diff
+    let contentToAnalyze: string | undefined;
     
-    if (!content) return; // Skip if no content to analyze
+    if (file.operation === 'create' && file.content) {
+      contentToAnalyze = file.content;
+    } else if (file.operation === 'modify' && file.unifiedDiff) {
+      // For modify operations, extract the added lines from the diff
+      const addedLines = file.unifiedDiff
+        .split('\n')
+        .filter(line => line.startsWith('+') && !line.startsWith('+++'))
+        .map(line => line.substring(1)) // Remove the + prefix
+        .join('\n');
+      
+      contentToAnalyze = addedLines;
+    } else {
+      contentToAnalyze = file.content || file.unifiedDiff;
+    }
+    
+    if (!contentToAnalyze) return; // Skip if no content to analyze
 
     // Only check for critical syntax errors that would prevent compilation
+    // Check for missing React imports when using hooks
+    const usesReactHooks = /useState|useEffect|useCallback|useMemo|useRef/.test(contentToAnalyze);
+    const hasReactImport = /import.*React.*from\s+['"`]react['"`]|import\s*{\s*[^}]*useState|useEffect/.test(contentToAnalyze);
+    
+    if (usesReactHooks && !hasReactImport) {
+      typeErrors.push({
+        file: file.filename,
+        error: "Uses React hooks but missing React import",
+      });
+    }
+
+    // Check for obvious syntax errors (more specific patterns)
     const syntaxErrors = [
-      /function\s+\w+\s*\([^)]*\)\s*{/g, // Missing closing brace
-      /const\s+\w+\s*=\s*\([^)]*\)\s*=>/g, // Arrow function syntax
-      /import\s+.*\s+from\s+['"`][^'"`]*['"`]/g, // Import syntax
+      // Unclosed function braces (look for function declaration without closing brace)
+      /function\s+\w+\s*\([^)]*\)\s*{[^}]*$/m,
+      // Unclosed JSX tags
+      /<[A-Z][a-zA-Z]*[^>]*>[^<]*$/m,
+      // Missing semicolons in critical places
+      /const\s+\w+\s*=\s*[^;]+$/m,
     ];
 
     // Check for basic syntax issues
     const hasSyntaxError = syntaxErrors.some((pattern) => {
-      const matches = content.match(pattern);
+      const matches = contentToAnalyze.match(pattern);
       return matches && matches.length > 0;
     });
 
@@ -1094,17 +1361,30 @@ function validateReactIssues(files: { filename: string; content?: string; unifie
   const reactErrors: { file: string; error: string }[] = [];
 
   files.forEach((file) => {
-    // Get content to analyze - prefer content for create operations, unifiedDiff for modify
-    const content = file.operation === 'create' ? file.content : 
-                   file.operation === 'modify' ? file.unifiedDiff : 
-                   file.content || file.unifiedDiff;
+    // For modify operations, we should analyze the actual file content, not the diff
+    let contentToAnalyze: string | undefined;
     
-    if (!content) return; // Skip if no content to analyze
+    if (file.operation === 'create' && file.content) {
+      contentToAnalyze = file.content;
+    } else if (file.operation === 'modify' && file.unifiedDiff) {
+      // For modify operations, extract the added lines from the diff
+      const addedLines = file.unifiedDiff
+        .split('\n')
+        .filter(line => line.startsWith('+') && !line.startsWith('+++'))
+        .map(line => line.substring(1)) // Remove the + prefix
+        .join('\n');
+      
+      contentToAnalyze = addedLines;
+    } else {
+      contentToAnalyze = file.content || file.unifiedDiff;
+    }
+    
+    if (!contentToAnalyze) return; // Skip if no content to analyze
 
     // Only check for critical React issues that would prevent compilation
-    const hasJSX = /<[A-Z][a-zA-Z]*\s*[^>]*>/g.test(content);
-    const hasReactHooks = /use[A-Z][a-zA-Z]*/g.test(content);
-    const hasClientDirective = /"use client"/g.test(content);
+    const hasJSX = /<[A-Z][a-zA-Z]*\s*[^>]*>/g.test(contentToAnalyze);
+    const hasReactHooks = /use[A-Z][a-zA-Z]*/g.test(contentToAnalyze);
+    const hasClientDirective = /"use client"/g.test(contentToAnalyze);
 
     // Check if JSX is used without proper setup
     if (hasJSX && !hasClientDirective && hasReactHooks) {
@@ -1128,8 +1408,9 @@ export async function executeMultiStagePipeline(
     stageName: string,
     stageType?: keyof typeof STAGE_MODEL_CONFIG
   ) => Promise<string>,
-  projectId?: string
-): Promise<{ filename: string; content: string }[]> {
+  projectId?: string,
+  isInitialGeneration: boolean = false
+): Promise<{ files: { filename: string; content: string }[]; intentSpec: IntentSpec }> {
   try {
     console.log("🚀 Starting multi-stage pipeline...");
     console.log("📝 User Prompt:", userPrompt);
@@ -1173,7 +1454,6 @@ export async function executeMultiStagePipeline(
     console.log("📥 Received from LLM (Stage 1):");
     console.log("Response Length:", intentResponse.length, "chars");
     console.log("Response Time:", endTime1 - startTime1, "ms");
-    console.log("Raw Response:", intentResponse.substring(0, 500) + "...");
 
     let intentSpec: IntentSpec;
     try {
@@ -1229,7 +1509,7 @@ export async function executeMultiStagePipeline(
       console.log("📋 Reason:", intentSpec.reason);
       console.log("📁 Returning", currentFiles.length, "boilerplate files");
       console.log("🎉 Pipeline completed early - no modifications needed!");
-      return currentFiles;
+      return { files: currentFiles, intentSpec };
     }
 
     // Stage 2: Patch Planner
@@ -1241,7 +1521,7 @@ export async function executeMultiStagePipeline(
     console.log("📤 Sending to LLM (Stage 2):");
     console.log(
       "System Prompt Length:",
-      getStage2PatchPlannerPrompt(intentSpec, currentFiles).length,
+      getStage2PatchPlannerPrompt(intentSpec, currentFiles, isInitialGeneration).length,
       "chars"
     );
     console.log("User Prompt:", patchPrompt);
@@ -1249,7 +1529,7 @@ export async function executeMultiStagePipeline(
 
     const startTime2 = Date.now();
     const patchResponse = await callLLM(
-      getStage2PatchPlannerPrompt(intentSpec, currentFiles),
+      getStage2PatchPlannerPrompt(intentSpec, currentFiles, isInitialGeneration),
       patchPrompt,
       "Stage 2: Patch Planner",
       "STAGE_2_PATCH_PLANNER"
@@ -1259,7 +1539,7 @@ export async function executeMultiStagePipeline(
     // Log Stage 2 response for debugging
     if (projectId) {
       logStageResponse(projectId, 'stage2-patch-planner', patchResponse, {
-        systemPromptLength: getStage2PatchPlannerPrompt(intentSpec, currentFiles).length,
+        systemPromptLength: getStage2PatchPlannerPrompt(intentSpec, currentFiles, isInitialGeneration).length,
         userPromptLength: patchPrompt.length,
         responseTime: endTime2 - startTime2,
         intentSpec: intentSpec
@@ -1403,7 +1683,7 @@ export async function executeMultiStagePipeline(
     console.log("📤 Sending to LLM (Stage 3):");
     console.log(
       "System Prompt Length:",
-      getStage3CodeGeneratorPrompt(patchPlan, intentSpec, currentFiles).length,
+      getStage3CodeGeneratorPrompt(patchPlan, intentSpec, currentFiles, isInitialGeneration).length,
       "chars"
     );
     console.log("User Prompt:", codePrompt);
@@ -1414,7 +1694,7 @@ export async function executeMultiStagePipeline(
 
     const startTime3 = Date.now();
     const codeResponse = await callLLM(
-      getStage3CodeGeneratorPrompt(patchPlan, intentSpec, currentFiles),
+      getStage3CodeGeneratorPrompt(patchPlan, intentSpec, currentFiles, isInitialGeneration),
       codePrompt,
       "Stage 3: Code Generator",
       "STAGE_3_CODE_GENERATOR"
@@ -1424,7 +1704,7 @@ export async function executeMultiStagePipeline(
     // Log Stage 3 response for debugging
     if (projectId) {
       logStageResponse(projectId, 'stage3-code-generator', codeResponse, {
-        systemPromptLength: getStage3CodeGeneratorPrompt(patchPlan, intentSpec, currentFiles).length,
+        systemPromptLength: getStage3CodeGeneratorPrompt(patchPlan, intentSpec, currentFiles, isInitialGeneration).length,
         userPromptLength: codePrompt.length,
         responseTime: endTime3 - startTime3,
         patchPlan: patchPlan,
@@ -1437,7 +1717,7 @@ export async function executeMultiStagePipeline(
     console.log("Response Time:", endTime3 - startTime3, "ms");
     console.log("Raw Response:", codeResponse.substring(0, 500) + "...");
 
-    let generatedFiles: { filename: string; content?: string; unifiedDiff?: string; operation?: string }[];
+    let generatedFiles: { filename: string; content?: string; unifiedDiff?: string; operation?: string; diffHunks?: DiffHunk[] }[];
     
     // Use the extracted parser utility
     try {
@@ -1600,7 +1880,8 @@ export async function executeMultiStagePipeline(
     let validFiles = generatedFiles;
     let invalidFiles = [];
 
-    // Enhanced validation check - include all validation types
+    // Enhanced validation check - be more conservative about what constitutes errors
+    // Only flag files as invalid if they have critical errors that would prevent compilation
     const hasValidationErrors =
       !validation.isValid ||
       (importValidation.missingImports.length > 0 &&
@@ -1608,6 +1889,29 @@ export async function executeMultiStagePipeline(
       clientDirectiveValidation.missingClientDirective.length > 0 ||
       typescriptValidation.typeErrors.length > 0 ||
       reactValidation.reactErrors.length > 0;
+
+    // Add detailed logging for validation decisions
+    console.log("🔍 Detailed Validation Analysis:");
+    console.log(`  Files Valid: ${validation.isValid}`);
+    console.log(`  Missing Files: ${validation.missingFiles.length}`);
+    console.log(`  Missing Imports: ${importValidation.missingImports.length}`);
+    console.log(`  Missing Client Directives: ${clientDirectiveValidation.missingClientDirective.length}`);
+    console.log(`  TypeScript Errors: ${typescriptValidation.typeErrors.length}`);
+    console.log(`  React Errors: ${reactValidation.reactErrors.length}`);
+    
+    // Log specific errors for debugging
+    if (importValidation.missingImports.length > 0) {
+      console.log("  Missing Import Details:", importValidation.missingImports);
+    }
+    if (clientDirectiveValidation.missingClientDirective.length > 0) {
+      console.log("  Missing Client Directive Details:", clientDirectiveValidation.missingClientDirective);
+    }
+    if (typescriptValidation.typeErrors.length > 0) {
+      console.log("  TypeScript Error Details:", typescriptValidation.typeErrors);
+    }
+    if (reactValidation.reactErrors.length > 0) {
+      console.log("  React Error Details:", reactValidation.reactErrors);
+    }
 
     if (hasValidationErrors) {
       console.log("⚠️ Validation failed, attempting fixes...");
@@ -1653,7 +1957,8 @@ export async function executeMultiStagePipeline(
         );
       });
 
-      // Enhanced file filtering - include all validation types
+      // Enhanced file filtering - be more conservative about what gets regenerated
+      // Only regenerate files with critical errors that would prevent compilation
       validFiles = generatedFiles.filter((file) => {
         const isMissingFile = validation.missingFiles.some((f) =>
           f.includes(file.filename)
@@ -1669,13 +1974,13 @@ export async function executeMultiStagePipeline(
           (r) => r.file === file.filename
         );
 
-        // Keep all files unless they have actual validation errors
-        return (
-          !isMissingFile &&
-          !isMissingClientDirective &&
-          !hasTypeScriptError &&
-          !hasReactError
-        );
+        // Only keep files that don't have critical compilation errors
+        // Missing imports might be false positives for diff files, so be more conservative
+        const hasCriticalError = isMissingFile || 
+                                (hasTypeScriptError && !file.unifiedDiff) || // Only flag TypeScript errors for non-diff files
+                                (hasReactError && !file.unifiedDiff); // Only flag React errors for non-diff files
+        
+        return !hasCriticalError;
       });
 
       invalidFiles = generatedFiles.filter((file) => {
@@ -1693,13 +1998,12 @@ export async function executeMultiStagePipeline(
           (r) => r.file === file.filename
         );
 
-        // Mark as invalid if there are any validation errors
-        return (
-          isMissingFile ||
-          isMissingClientDirective ||
-          hasTypeScriptError ||
-          hasReactError
-        );
+        // Only mark as invalid if there are critical compilation errors
+        const hasCriticalError = isMissingFile || 
+                                (hasTypeScriptError && !file.unifiedDiff) || // Only flag TypeScript errors for non-diff files
+                                (hasReactError && !file.unifiedDiff); // Only flag React errors for non-diff files
+        
+        return hasCriticalError;
       }).map(file => ({
         filename: file.filename,
         content: file.content || '' // Ensure content is always a string
@@ -1713,94 +2017,106 @@ export async function executeMultiStagePipeline(
         console.log(`  🔄 Regenerate: ${file.filename}`)
       );
 
-      // Rewrite invalid files using LLM
-      const rewrittenFiles = await callLLM(
-        getStage4ValidatorPrompt(invalidFiles, errors),
-        "Stage 4: Validation & Self-Debug",
-        "STAGE_4_VALIDATOR"
-      );
-
-      // Parse rewritten files with robust JSON parsing
-      let rewrittenFilesParsed: { filename: string; content: string }[];
-      
-      // Use the extracted parser utility
-      try {
-        rewrittenFilesParsed = parseStage4ValidatorResponse(rewrittenFiles);
-      } catch (error) {
-        console.error("❌ Failed to parse rewritten files as JSON:");
-        console.error("Raw response:", rewrittenFiles.substring(0, 500));
-        throw new Error(
-          `Stage 4 JSON parsing failed: ${
-            error instanceof Error ? error.message : String(error)
-          }`
+      // Only rewrite files if there are actually invalid files
+      if (invalidFiles.length > 0) {
+        console.log("🔄 Rewriting invalid files using LLM...");
+        const rewrittenFiles = await callLLM(
+          getStage4ValidatorPrompt(invalidFiles, errors, isInitialGeneration),
+          "Stage 4: Validation & Self-Debug",
+          "STAGE_4_VALIDATOR"
         );
-      }
 
-      // Validate that Stage 4 returned the correct files
-      const expectedFilenames = new Set(invalidFiles.map((f) => f.filename));
-      const returnedFilenames = new Set(
-        rewrittenFilesParsed.map((f) => f.filename)
-      );
+        // Parse rewritten files with robust JSON parsing
+        let rewrittenFilesParsed: { filename: string; content: string; unifiedDiff?: string; diffHunks?: DiffHunk[] }[];
+        
+        // Use the extracted parser utility
+        try {
+          rewrittenFilesParsed = parseStage4ValidatorResponse(rewrittenFiles);
+        } catch (error) {
+          console.error("❌ Failed to parse rewritten files as JSON:");
+          console.error("Raw response:", rewrittenFiles.substring(0, 500));
+          throw new Error(
+            `Stage 4 JSON parsing failed: ${
+              error instanceof Error ? error.message : String(error)
+            }`
+          );
+        }
 
-      console.log("🔍 Stage 4 validation check:");
-      console.log(
-        `  Expected files: ${Array.from(expectedFilenames).join(", ")}`
-      );
-      console.log(
-        `  Returned files: ${Array.from(returnedFilenames).join(", ")}`
-      );
-
-      const missingFiles = Array.from(expectedFilenames).filter(
-        (f) => !returnedFilenames.has(f)
-      );
-      const extraFiles = Array.from(returnedFilenames).filter(
-        (f) => !expectedFilenames.has(f)
-      );
-
-      if (missingFiles.length > 0) {
-        console.warn(`⚠️ Stage 4 missing files: ${missingFiles.join(", ")}`);
-      }
-      if (extraFiles.length > 0) {
-        console.warn(`⚠️ Stage 4 extra files: ${extraFiles.join(", ")}`);
-      }
-
-      // Combine valid and rewritten files
-      // If Stage 4 didn't return the expected files, keep the original invalid files
-      if (missingFiles.length > 0) {
-        console.warn(
-          "⚠️ Stage 4 didn't return all expected files, keeping original files"
+        // Validate that Stage 4 returned the correct files
+        const expectedFilenames = new Set(invalidFiles.map((f) => f.filename));
+        const returnedFilenames = new Set(
+          rewrittenFilesParsed.map((f) => f.filename)
         );
-        const fallbackFiles = invalidFiles.filter((f) =>
-          missingFiles.includes(f.filename)
+
+        console.log("🔍 Stage 4 validation check:");
+        console.log(
+          `  Expected files: ${Array.from(expectedFilenames).join(", ")}`
         );
-        generatedFiles = [
-          ...validFiles,
-          ...rewrittenFilesParsed,
-          ...fallbackFiles,
-        ];
+        console.log(
+          `  Returned files: ${Array.from(returnedFilenames).join(", ")}`
+        );
+
+        const missingFiles = Array.from(expectedFilenames).filter(
+          (f) => !returnedFilenames.has(f)
+        );
+        const extraFiles = Array.from(returnedFilenames).filter(
+          (f) => !expectedFilenames.has(f)
+        );
+
+        if (missingFiles.length > 0) {
+          console.warn(`⚠️ Stage 4 missing files: ${missingFiles.join(", ")}`);
+        }
+        if (extraFiles.length > 0) {
+          console.warn(`⚠️ Stage 4 extra files: ${extraFiles.join(", ")}`);
+        }
+
+        // Combine valid and rewritten files
+        // For initial generation: Stage 4 returns complete corrected files
+        // For follow-up changes: Stage 4 returns surgical diff patches for critical fixes
+        if (missingFiles.length > 0) {
+          console.warn(
+            "⚠️ Stage 4 didn't return all expected files, keeping original files"
+          );
+          const fallbackFiles = invalidFiles.filter((f) =>
+            missingFiles.includes(f.filename)
+          );
+          generatedFiles = [
+            ...validFiles,
+            ...rewrittenFilesParsed,
+            ...fallbackFiles,
+          ];
+        } else {
+          generatedFiles = [...validFiles, ...rewrittenFilesParsed];
+        }
+
+        console.log("📊 Final file combination:");
+        console.log(`  Valid files kept: ${validFiles.length}`);
+        console.log(`  Rewritten files: ${rewrittenFilesParsed.length}`);
+        console.log(
+          `  Fallback files: ${missingFiles.length > 0 ? missingFiles.length : 0}`
+        );
+        console.log(`  Total final files: ${generatedFiles.length}`);
+
+        // Remove duplicates by filename (keep the last occurrence)
+        const uniqueFiles = new Map<
+          string,
+          { filename: string; content?: string; unifiedDiff?: string; operation?: string; diffHunks?: DiffHunk[] }
+        >();
+        generatedFiles.forEach((file) => {
+          uniqueFiles.set(file.filename, file);
+        });
+        generatedFiles = Array.from(uniqueFiles.values());
+
+        console.log(`  After deduplication: ${generatedFiles.length} files`);
       } else {
-        generatedFiles = [...validFiles, ...rewrittenFilesParsed];
+        console.log("✅ No files need rewriting - all files are valid");
+        // Keep the original generated files if no validation errors
+        generatedFiles = validFiles;
       }
-
-      console.log("📊 Final file combination:");
-      console.log(`  Valid files kept: ${validFiles.length}`);
-      console.log(`  Rewritten files: ${rewrittenFilesParsed.length}`);
-      console.log(
-        `  Fallback files: ${missingFiles.length > 0 ? missingFiles.length : 0}`
-      );
-      console.log(`  Total final files: ${generatedFiles.length}`);
-
-      // Remove duplicates by filename (keep the last occurrence)
-      const uniqueFiles = new Map<
-        string,
-        { filename: string; content?: string; unifiedDiff?: string; operation?: string }
-      >();
-      generatedFiles.forEach((file) => {
-        uniqueFiles.set(file.filename, file);
-      });
-      generatedFiles = Array.from(uniqueFiles.values());
-
-      console.log(`  After deduplication: ${generatedFiles.length} files`);
+    } else {
+      console.log("✅ No validation errors found - keeping all generated files");
+      // Keep all generated files if no validation errors
+      generatedFiles = validFiles;
     }
 
     console.log("✅ Stage 4 complete - Final Files:");
@@ -1854,41 +2170,82 @@ export async function executeMultiStagePipeline(
     console.log("  Files:", generatedFiles.map((f) => f.filename).join(", "));
 
     // Convert generated files to required format with content field
-    // First, separate files with diffs from files with content
+    let processedFiles: { filename: string; content: string }[] = [];
+    
+    // Separate files with diffs from files with content (for both initial and follow-up)
     const filesWithDiffs = generatedFiles.filter(file => file.operation === 'modify' && file.unifiedDiff);
     const filesWithContent = generatedFiles.filter(file => file.operation === 'create' && file.content);
     
-    // Log the separation for debugging
-    console.log(`📊 File processing breakdown:`);
-    console.log(`  Files with diffs: ${filesWithDiffs.length}`);
-    console.log(`  Files with content: ${filesWithContent.length}`);
-    console.log(`  Total generated files: ${generatedFiles.length}`);
-    
-    // Apply diffs to original files using the robust applyDiffsToFiles function
-    let processedFiles: { filename: string; content: string }[] = [];
-    
-    if (filesWithDiffs.length > 0) {
-      console.log(`🔄 Applying diffs to ${filesWithDiffs.length} files...`);
+    if (isInitialGeneration) {
+      // For initial generation, use all files as complete content (no diffs)
+      console.log("📝 Initial generation - using complete file content");
+      processedFiles = generatedFiles.map(file => ({
+        filename: file.filename,
+        content: file.content || ''
+      }));
+    } else {
+      // For follow-up changes, apply diffs
+      
+      // Log the separation for debugging
+      console.log(`📊 File processing breakdown:`);
+      console.log(`  Files with diffs: ${filesWithDiffs.length}`);
+      console.log(`  Files with content: ${filesWithContent.length}`);
+      console.log(`  Total generated files: ${generatedFiles.length}`);
+      
+      // Apply diffs to original files using the robust applyDiffsToFiles function
+      if (filesWithDiffs.length > 0) {
+        console.log(`🔄 Applying diffs to ${filesWithDiffs.length} files...`);
       
       // Convert unified diffs to FileDiff format for applyDiffsToFiles
       const diffs = filesWithDiffs.map(file => {
         const originalFile = currentFiles.find(f => f.filename === file.filename);
+        
+        console.log(`🔍 Processing file: ${file.filename}`);
+        console.log(`🔍 File has unifiedDiff: ${!!file.unifiedDiff}`);
+        console.log(`🔍 File has diffHunks: ${!!file.diffHunks}`);
+        console.log(`🔍 unifiedDiff length: ${file.unifiedDiff?.length || 0}`);
+        console.log(`🔍 diffHunks length: ${file.diffHunks?.length || 0}`);
+        
+        // Use diffHunks directly if available, otherwise parse unifiedDiff
+        let hunks: DiffHunk[] = [];
+        try {
+          hunks = parseUnifiedDiff(file.unifiedDiff!);
+          console.log(`📊 Parsed ${hunks.length} hunks for ${file.filename}`);
+          
+          // Validate diff before attempting to apply
+          if (hunks.length === 0) {
+            console.warn(`⚠️ No valid hunks found in diff for ${file.filename}, skipping diff application`);
+            return null; // Skip this diff
+          }
+          
+          // Check if diff is too large (potential full rewrite)
+          const totalChanges = hunks.reduce((sum, hunk) => sum + hunk.oldLines + hunk.newLines, 0);
+          if (originalFile && totalChanges > originalFile.content.split('\n').length * 0.8) {
+            console.warn(`⚠️ Diff for ${file.filename} is too large (${totalChanges} changes), might be a full rewrite - skipping`);
+            return null; // Skip this diff
+          }
+          
+        } catch (error) {
+          console.error(`❌ Failed to parse unified diff for ${file.filename}:`, error);
+          return null; // Skip this diff
+        }
+        
         if (!originalFile) {
           console.warn(`⚠️ Original file not found for ${file.filename}, treating as new file`);
           // For new files, we'll use the diff content as the file content
           return {
             filename: file.filename,
-            hunks: [], // Will be populated by parseUnifiedDiff
+            hunks: hunks,
             unifiedDiff: file.unifiedDiff!
           };
         }
         
         return {
           filename: file.filename,
-          hunks: [], // Will be populated by parseUnifiedDiff
+          hunks: hunks,
           unifiedDiff: file.unifiedDiff!
         };
-      });
+      }).filter(diff => diff !== null); // Filter out skipped diffs
       
       try {
         const filesWithAppliedDiffs = applyDiffsToFiles(currentFiles, diffs);
@@ -1908,10 +2265,10 @@ export async function executeMultiStagePipeline(
               });
             } catch (diffError) {
               console.error(`❌ Failed to apply diff to ${file.filename}:`, diffError);
-              processedFiles.push({
-                filename: file.filename,
-                content: originalFile.content
-              });
+              // Instead of falling back to boilerplate, try to extract content from the diff
+              // or skip this file entirely to prevent boilerplate contamination
+              console.warn(`⚠️ Skipping ${file.filename} due to diff application failure - this prevents boilerplate contamination`);
+              // Don't add this file to processedFiles - let it be handled by the content-based files
             }
           } else {
             // This shouldn't happen with the new filtering logic
@@ -1919,9 +2276,10 @@ export async function executeMultiStagePipeline(
           }
         });
       }
+      }
     }
     
-    // Add files that already have content (including create operations)
+    // Add files that already have content (including create operations) - for both initial and follow-up
     if (filesWithContent.length > 0) {
       console.log(`📝 Adding ${filesWithContent.length} files with content...`);
       filesWithContent.forEach(file => {
@@ -1938,7 +2296,7 @@ export async function executeMultiStagePipeline(
       console.log(`  📄 ${file.filename} (${file.content.length} chars)`);
     });
     
-    return processedFiles;
+    return { files: processedFiles, intentSpec };
   } catch (error) {
     console.error("❌ Multi-stage pipeline failed:");
     console.error("  Error:", error);

@@ -75,10 +75,29 @@ export async function executeToolCalls(
     try {
       console.log(`🔧 Executing: ${toolCall.tool} ${toolCall.args.join(' ')}`);
       
+      // Fix working directory and args for common tools
+      let fixedToolCall = { ...toolCall };
+      
+      if (toolCall.tool === 'cat' && toolCall.args.length > 0) {
+        // For cat commands, if the file path includes the working directory, adjust it
+        const filePath = toolCall.args[0];
+        const workingDir = toolCall.workingDirectory || '.';
+        
+        if (filePath.startsWith(workingDir + '/')) {
+          // Remove the working directory prefix from the file path
+          const relativePath = filePath.substring(workingDir.length + 1);
+          fixedToolCall = {
+            ...toolCall,
+            args: [relativePath]
+          };
+          console.log(`🔧 Fixed cat command: ${toolCall.tool} ${fixedToolCall.args.join(' ')} (was: ${toolCall.args.join(' ')})`);
+        }
+      }
+      
       const result = await executor.executeCommand({
-        command: toolCall.tool,
-        args: toolCall.args,
-        workingDirectory: toolCall.workingDirectory || '.'
+        command: fixedToolCall.tool,
+        args: fixedToolCall.args,
+        workingDirectory: fixedToolCall.workingDirectory || '.'
       });
 
       const toolResult: ToolExecutionResult = {
@@ -207,7 +226,8 @@ export async function gatherContextWithTools(
   currentFiles: { filename: string; content: string }[],
   projectId: string,
   accessToken: string,
-  callLLM: (systemPrompt: string, userPrompt: string, stageName: string, stageType?: keyof typeof STAGE_MODEL_CONFIG) => Promise<string>
+  callLLM: (systemPrompt: string, userPrompt: string, stageName: string, stageType?: keyof typeof STAGE_MODEL_CONFIG) => Promise<string>,
+  projectDir?: string
 ): Promise<{
   contextResult: ContextGatheringResult;
   contextData: string;
@@ -301,11 +321,17 @@ Return ONLY the JSON object.`,
   }
 
   // Execute tool calls
-  const executionResult = await executeToolCallsViaAPI(
-    contextResult,
-    projectId,
-    accessToken
-  );
+  let executionResult: ContextExecutionResult;
+  
+  if (projectDir) {
+    // Use local tool execution when project directory is available
+    console.log(`🔧 Using local tool execution with project directory: ${projectDir}`);
+    executionResult = await executeToolCalls(contextResult, projectId, projectDir);
+  } else {
+    // Fallback to API execution when project directory is not available
+    console.log(`🔧 Using API tool execution (no project directory provided)`);
+    executionResult = await executeToolCallsViaAPI(contextResult, projectId, accessToken);
+  }
 
   // Enhance current files with context data
   const enhancedFiles = [...currentFiles];

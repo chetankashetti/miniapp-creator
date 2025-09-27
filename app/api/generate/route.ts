@@ -300,6 +300,42 @@ function estimateCost(
   return `~$${totalCost.toFixed(4)}`;
 }
 
+function generateProjectName(intentSpec: { feature: string; reason?: string }): string {
+  // Use the LLM-generated feature name as the base
+  let projectName = intentSpec.feature;
+  
+  // Clean up the feature name
+  projectName = projectName
+    .toLowerCase()
+    .replace(/[^\w\s]/g, ' ') // Remove special characters
+    .replace(/\s+/g, ' ') // Normalize whitespace
+    .trim();
+  
+  // Capitalize words
+  const words = projectName.split(' ').map(word => 
+    word.charAt(0).toUpperCase() + word.slice(1)
+  );
+  
+  projectName = words.join(' ');
+  
+  // Add "App" suffix if it doesn't already contain common app-related terms
+  const appTerms = ['app', 'application', 'miniapp', 'mini app', 'dashboard', 'platform', 'tool', 'game', 'player', 'gallery', 'blog', 'store', 'shop'];
+  const hasAppTerm = appTerms.some(term => projectName.toLowerCase().includes(term));
+  
+  if (!hasAppTerm) {
+    projectName += ' App';
+  }
+  
+  // Handle special cases for better naming
+  if (projectName.toLowerCase().includes('bootstrap') || projectName.toLowerCase().includes('template')) {
+    const now = new Date();
+    const timeStr = now.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    return `Miniapp ${timeStr}`;
+  }
+  
+  return projectName;
+}
+
 export async function POST(request: NextRequest) {
   try {
     const { user, isAuthorized, error } = await authenticateRequest(request);
@@ -430,13 +466,15 @@ export async function POST(request: NextRequest) {
       );
     };
 
-    // Use enhanced pipeline with context gathering and diff-based patching
+    // Use enhanced pipeline with context gathering for initial generation
     const enhancedResult = await executeEnhancedPipeline(
       prompt,
       boilerplateFiles,
       projectId,
       accessToken,
-      callLLM
+      callLLM,
+      true, // isInitialGeneration = true for POST requests
+      userDir // projectDir
     );
 
     if (!enhancedResult.success) {
@@ -543,9 +581,14 @@ export async function POST(request: NextRequest) {
     try {
       console.log("💾 Saving project to database...");
       
+      // Generate meaningful project name based on LLM-generated intent
+      const projectName = enhancedResult.intentSpec 
+        ? generateProjectName(enhancedResult.intentSpec)
+        : `Project ${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`;
+      
       const project = await createProject(
         user.id, // Use actual user ID from authentication
-        `Generated Project ${projectId.substring(0, 8)}`,
+        projectName,
         `AI-generated project: ${userRequest.substring(0, 100)}...`,
         projectUrl,
         projectId // Pass the custom project ID
@@ -760,6 +803,7 @@ export async function PATCH(request: NextRequest) {
         projectId,
         files: result.files,
         diffs: result.diffs,
+        changed: result.files.map(f => f.filename), // Add changedFiles for frontend compatibility
         previewUrl: `http://localhost:8080/p/${projectId}`,
         message: "Project updated with diff-based changes"
       });
@@ -779,7 +823,7 @@ export async function PATCH(request: NextRequest) {
         );
       };
 
-      // Use the enhanced pipeline with context gathering and diff-based patching
+      // Use the enhanced pipeline with context gathering for follow-up changes
       console.log(
         "🔄 Starting enhanced pipeline with context gathering..."
       );
@@ -788,7 +832,9 @@ export async function PATCH(request: NextRequest) {
         currentFiles,
         projectId,
         accessToken,
-        callLLM
+        callLLM,
+        false, // isInitialGeneration = false for PATCH requests
+        userDir // projectDir
       );
 
       if (!enhancedResult.success) {

@@ -1,11 +1,13 @@
 // Enhanced LLM Pipeline with Diff-Based Patching
-// This module extends the existing pipeline to support surgical code changes
+// This module provides a specialized pipeline for follow-up changes using surgical diffs
+// It uses the multi-stage pipeline with diff-based prompts for optimal results
 
 import { 
   STAGE_MODEL_CONFIG,
   PatchPlan,
   FileDiff,
-  getStage0ContextGathererPrompt
+  getStage0ContextGathererPrompt,
+  executeMultiStagePipeline
 } from './llmOptimizer';
 import { applyDiffToContent, applyDiffHunks, validateDiff } from './diffUtils';
 import { executeToolCalls } from './toolExecutionService';
@@ -99,114 +101,24 @@ export async function executeDiffBasedPipeline(
     }
   }
 
-  // Stage 1: Intent Parser
-  console.log('🎯 Stage 1: Intent Parser');
-  const intentPrompt = `Parse this request: ${userPrompt}`;
-  await callLLM(
-    `You are an intent parser. Analyze the user request and extract structured requirements.`,
-    intentPrompt,
-    'Stage 1: Intent Parser',
-    'STAGE_1_INTENT_PARSER'
-  );
+        // Use the multi-stage pipeline with diff-based prompts (isInitialGeneration = false)
+        console.log('🔄 Using multi-stage pipeline for diff-based changes');
+        const pipelineResult = await executeMultiStagePipeline(
+          userPrompt,
+          currentFiles,
+          callLLM,
+          projectId,
+          false // isInitialGeneration = false for follow-up changes
+        );
 
-  // Stage 2: Patch Planner (Enhanced with Diff Generation)
-  console.log('📋 Stage 2: Patch Planner with Diff Generation');
-  const patchPrompt = `Create a patch plan with diffs for: ${userPrompt}`;
-  await callLLM(
-    `You are a patch planner. Create detailed patch plans with unified diff hunks for surgical code changes.`,
-    patchPrompt,
-    'Stage 2: Patch Planner',
-    'STAGE_2_PATCH_PLANNER'
-  );
+        const generatedFilesFromPipeline = pipelineResult.files;
 
-  // Stage 3: Code Generator (Diff-Based)
-  console.log('⚡ Stage 3: Diff-Based Code Generator');
-  const codePrompt = `Generate diffs for: ${userPrompt}`;
-  const codeResponse = await callLLM(
-    `You are a code generator. Generate unified diff patches for surgical changes rather than full file rewrites.
-
-CRITICAL: You MUST return ONLY valid JSON. No explanations, no text, no markdown, no code fences.
-
-OUTPUT FORMAT:
-Generate a JSON array of file diffs and complete files:
-[
-  {
-    "filename": "path/to/file",
-    "operation": "modify",
-    "unifiedDiff": "@@ -1,3 +1,6 @@\\n import { ConnectWallet } from '@/components/wallet/ConnectWallet';\\n import { Tabs } from '@/components/ui/Tabs';\\n+import { useReadContract } from 'wagmi';\\n+import { useAccount } from 'wagmi';\\n import { useUser } from '@/hooks';\\n ",
-    "diffHunks": [
-      {
-        "oldStart": 1,
-        "oldLines": 3,
-        "newStart": 1,
-        "newLines": 6,
-        "lines": [" import { ConnectWallet } from '@/components/wallet/ConnectWallet';", " import { Tabs } from '@/components/ui/Tabs';", "+import { useReadContract } from 'wagmi';", "+import { useAccount } from 'wagmi';", " import { useUser } from '@/hooks';", " "]
-      }
-    ]
-  },
-  {
-    "filename": "path/to/newfile",
-    "operation": "create",
-    "content": "complete file content for new files"
-  }
-]
-
-REMEMBER: Return ONLY the JSON array above. No other text, no explanations, no markdown formatting.`,
-    codePrompt,
-    'Stage 3: Code Generator',
-    'STAGE_3_CODE_GENERATOR'
-  );
-
-  let codeResult;
-  try {
-    codeResult = JSON.parse(codeResponse);
-  } catch (error) {
-    console.error('❌ Failed to parse Stage 3 response as JSON:');
-    console.error('Raw response:', codeResponse);
-    throw new Error(
-      `Stage 3 JSON parsing failed: ${
-        error instanceof Error ? error.message : String(error)
-      }`
-    );
-  }
-
-  // Process the code generation result
-  for (const fileResult of codeResult) {
-    if (fileResult.operation === 'create') {
-      // New file - add to generated files
-      generatedFiles.push({
-        filename: fileResult.filename,
-        content: fileResult.content
-      });
-    } else if (fileResult.operation === 'modify') {
-      // Modified file - apply diff to existing content
-      const existingFile = currentFiles.find(f => f.filename === fileResult.filename);
-      if (existingFile) {
-        try {
-          // Apply the unified diff to the existing content
-          const newContent = applyDiffToContent(existingFile.content, fileResult.unifiedDiff);
-          
-          generatedFiles.push({
-            filename: fileResult.filename,
-            content: newContent
-          });
-
-          // Store the diff for rollback capability
-          diffs.push({
-            filename: fileResult.filename,
-            hunks: fileResult.diffHunks || [],
-            unifiedDiff: fileResult.unifiedDiff
-          });
-        } catch (error) {
-          console.error(`❌ Failed to apply diff to ${fileResult.filename}:`, error);
-          // Fallback to full file content if diff application fails
-          generatedFiles.push({
-            filename: fileResult.filename,
-            content: fileResult.content || existingFile.content
-          });
-        }
-      }
-    }
+  // Process the generated files and extract diffs
+  for (const file of generatedFilesFromPipeline) {
+    generatedFiles.push({
+      filename: file.filename,
+      content: file.content
+    });
   }
 
   // Stage 4: Validation (Diff-Based)
@@ -248,24 +160,66 @@ export function applyDiffsToFiles(
   diffs: FileDiff[]
 ): { filename: string; content: string }[] {
   console.log('applyDiffsToFiles called with:', { files: files.length, diffs: diffs.length });
-  const result = [...files];
+  const result: { filename: string; content: string }[] = [];
+  const modifiedFiles = new Set<string>();
 
   for (const diff of diffs) {
     console.log('Processing diff for:', diff.filename);
-    const fileIndex = result.findIndex(f => f.filename === diff.filename);
-    console.log('File index:', fileIndex);
-    if (fileIndex !== -1) {
+    const originalFile = files.find(f => f.filename === diff.filename);
+    
+    if (originalFile) {
+      // File exists - apply diff
       try {
         console.log('Applying diff hunks:', diff.hunks);
-        result[fileIndex].content = applyDiffHunks(result[fileIndex].content, diff.hunks);
-        console.log(`✅ Applied diff to ${diff.filename}`);
-        console.log('New content:', result[fileIndex].content);
+        const newContent = applyDiffHunks(originalFile.content, diff.hunks);
+        
+        // Only add to result if content actually changed
+        if (newContent !== originalFile.content) {
+          result.push({
+            filename: diff.filename,
+            content: newContent
+          });
+          modifiedFiles.add(diff.filename);
+          console.log(`✅ Applied diff to ${diff.filename}`);
+        } else {
+          console.log(`⚠️ No changes detected for ${diff.filename}, skipping`);
+        }
       } catch (error) {
         console.error(`❌ Failed to apply diff to ${diff.filename}:`, error);
+        // Add original file as fallback
+        result.push(originalFile);
+        modifiedFiles.add(diff.filename);
+      }
+    } else {
+      // File doesn't exist - create new file from diff content
+      console.log(`📝 Creating new file ${diff.filename} from diff content`);
+      try {
+        // Extract content from unified diff
+        const diffLines = diff.unifiedDiff.split('\n');
+        const contentLines = diffLines
+          .filter(line => line.startsWith('+') && !line.startsWith('+++'))
+          .map(line => line.substring(1))
+          .join('\n');
+        
+        result.push({
+          filename: diff.filename,
+          content: contentLines
+        });
+        modifiedFiles.add(diff.filename);
+        console.log(`✅ Created new file ${diff.filename} with ${contentLines.length} chars`);
+      } catch (error) {
+        console.error(`❌ Failed to create file ${diff.filename}:`, error);
+        // Add empty file as fallback
+        result.push({
+          filename: diff.filename,
+          content: ''
+        });
+        modifiedFiles.add(diff.filename);
       }
     }
   }
 
+  console.log(`📊 applyDiffsToFiles returning ${result.length} modified files:`, Array.from(modifiedFiles));
   return result;
 }
 

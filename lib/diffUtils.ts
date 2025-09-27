@@ -58,7 +58,7 @@ export function applyDiffToContent(
 /**
  * Parse unified diff string into hunks
  */
-function parseUnifiedDiff(unifiedDiff: string): DiffHunk[] {
+export function parseUnifiedDiff(unifiedDiff: string): DiffHunk[] {
   const hunks: DiffHunk[] = [];
   const lines = unifiedDiff.split('\n');
   
@@ -96,6 +96,88 @@ function parseUnifiedDiff(unifiedDiff: string): DiffHunk[] {
 }
 
 /**
+ * Find the best contextual match for a line when exact match fails
+ */
+function findBestContextualMatch(
+  lines: string[],
+  targetLine: string,
+  expectedIndex: number,
+  contextLines: string[]
+): { index: number; reason: string } {
+  const targetTrimmed = targetLine.trim();
+  
+  // Strategy 1: Look for exact content match within reasonable distance
+  const searchRadius = Math.min(50, lines.length / 4); // Search within 50 lines or 25% of file
+  const searchStart = Math.max(0, expectedIndex - searchRadius);
+  const searchEnd = Math.min(lines.length, expectedIndex + searchRadius);
+  
+  for (let i = searchStart; i < searchEnd; i++) {
+    if (lines[i] && lines[i].trim() === targetTrimmed) {
+      const distance = Math.abs(i - expectedIndex);
+      return { index: i, reason: `exact content match (distance: ${distance})` };
+    }
+  }
+  
+  // Strategy 2: Look for partial content match (key-based) within reasonable distance
+  const keyToReplace = targetLine.split(':')[0].trim() || targetLine.split('=')[0].trim() || targetLine.split(' ')[0].trim();
+  
+  let bestKeyMatch = { index: -1, distance: Infinity, reason: '' };
+  
+  for (let i = searchStart; i < searchEnd; i++) {
+    if (lines[i] && lines[i].includes(keyToReplace)) {
+      const distance = Math.abs(i - expectedIndex);
+      if (distance < bestKeyMatch.distance) {
+        bestKeyMatch = { index: i, distance, reason: `key match "${keyToReplace}" (distance: ${distance})` };
+      }
+    }
+  }
+  
+  if (bestKeyMatch.index !== -1) {
+    return bestKeyMatch;
+  }
+  
+  // Strategy 3: Look for context-based match using surrounding lines
+  // Extract context from the diff hunk
+  const contextBefore = contextLines.filter(line => !line.startsWith('+') && !line.startsWith('-')).slice(0, 2);
+  const contextAfter = contextLines.filter(line => !line.startsWith('+') && !line.startsWith('-')).slice(-2);
+  
+  let bestContextMatch = { index: -1, score: 0, reason: '' };
+  
+  for (let i = 0; i < lines.length - contextBefore.length - contextAfter.length; i++) {
+    let score = 0;
+    
+    // Check context before
+    for (let j = 0; j < contextBefore.length; j++) {
+      if (lines[i + j] && lines[i + j].trim() === contextBefore[j].trim()) {
+        score += 1;
+      }
+    }
+    
+    // Check context after
+    for (let j = 0; j < contextAfter.length; j++) {
+      if (lines[i + contextBefore.length + 1 + j] && 
+          lines[i + contextBefore.length + 1 + j].trim() === contextAfter[j].trim()) {
+        score += 1;
+      }
+    }
+    
+    if (score > bestContextMatch.score) {
+      bestContextMatch = { 
+        index: i + contextBefore.length, 
+        score, 
+        reason: `context match (score: ${score}/${contextBefore.length + contextAfter.length})` 
+      };
+    }
+  }
+  
+  if (bestContextMatch.score > 0) {
+    return bestContextMatch;
+  }
+  
+  return { index: -1, reason: 'no suitable match found' };
+}
+
+/**
  * Apply diff hunks to original content
  */
 export function applyDiffHunks(
@@ -109,34 +191,69 @@ export function applyDiffHunks(
     // Process hunks in reverse order to maintain line numbers
     const sortedHunks = [...diffHunks].sort((a, b) => b.oldStart - a.oldStart);
     
-    for (const hunk of sortedHunks) {
+    for (let hunkIndex = 0; hunkIndex < sortedHunks.length; hunkIndex++) {
+      const hunk = sortedHunks[hunkIndex];
       const startIndex = hunk.oldStart - 1; // Convert to 0-based index
       
-      // Process lines in order
-      let linesToRemove = 0;
+      // Process lines in order to build the replacement
+      const linesToRemove: string[] = [];
       const linesToAdd: string[] = [];
       
       for (const line of hunk.lines) {
         if (line.startsWith('-')) {
           // Mark line for removal
-          linesToRemove++;
+          const lineToRemove = line.substring(1);
+          linesToRemove.push(lineToRemove);
         } else if (line.startsWith('+')) {
           // Add new line
-          linesToAdd.push(line.substring(1));
-        } else {
-          // Context line - no action needed
+          const lineToAdd = line.substring(1);
+          linesToAdd.push(lineToAdd);
         }
       }
       
-      // Remove old lines
-      if (linesToRemove > 0) {
-        result.splice(startIndex, linesToRemove);
-      }
-      
-      // Add new lines - if oldLines is 0, insert after the start position
-      if (linesToAdd.length > 0) {
-        const insertIndex = hunk.oldLines === 0 ? startIndex + 1 : startIndex;
-        result.splice(insertIndex, 0, ...linesToAdd);
+      // Find the exact lines to remove and replace them
+      if (linesToRemove.length > 0) {
+        // Find the first occurrence of the line to remove
+        let removeIndex = -1;
+        for (let i = startIndex; i < Math.min(startIndex + linesToRemove.length, result.length); i++) {
+          const currentLine = result[i] || '';
+          const targetLine = linesToRemove[0];
+          const match = currentLine.trim() === targetLine.trim();
+          
+          if (match) {
+            removeIndex = i;
+            break;
+          }
+        }
+        
+        if (removeIndex !== -1) {
+          // Remove the old lines
+          result.splice(removeIndex, linesToRemove.length);
+          
+          // Insert new lines at the same position
+          if (linesToAdd.length > 0) {
+            result.splice(removeIndex, 0, ...linesToAdd);
+          }
+        } else {
+          // Enhanced fallback: find the best contextual match
+          let bestMatch = findBestContextualMatch(result, linesToRemove[0], startIndex, hunk.lines);
+          
+          if (bestMatch.index !== -1) {
+            // Remove the matched line
+            result.splice(bestMatch.index, 1);
+            // Insert new lines at the same position
+            if (linesToAdd.length > 0) {
+              result.splice(bestMatch.index, 0, ...linesToAdd);
+            }
+          } else {
+            if (linesToAdd.length > 0) {
+              result.splice(startIndex, 0, ...linesToAdd);
+            }
+          }
+        }
+      } else if (linesToAdd.length > 0) {
+        // No lines to remove, just add new lines after the specified position
+        result.splice(startIndex + 1, 0, ...linesToAdd);
       }
     }
     
@@ -327,3 +444,4 @@ export function getDiffStats(diff: FileDiff): {
     hunks: diff.hunks.length
   };
 }
+

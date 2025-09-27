@@ -274,6 +274,31 @@ export async function getProjectChatMessages(projectId: string) {
     .orderBy(chatMessages.timestamp);
 }
 
+export async function migrateChatMessages(fromProjectId: string, toProjectId: string) {
+  // Get all chat messages from the source project
+  const messages = await db.select().from(chatMessages)
+    .where(eq(chatMessages.projectId, fromProjectId));
+  
+  if (messages.length === 0) {
+    console.log(`No chat messages to migrate from ${fromProjectId} to ${toProjectId}`);
+    return [];
+  }
+  
+  // Update the projectId for all messages
+  const updatedMessages = messages.map(msg => ({
+    ...msg,
+    projectId: toProjectId
+  }));
+  
+  // Delete old messages and insert with new projectId
+  await db.delete(chatMessages).where(eq(chatMessages.projectId, fromProjectId));
+  
+  const migratedMessages = await db.insert(chatMessages).values(updatedMessages).returning();
+  
+  console.log(`✅ Migrated ${migratedMessages.length} chat messages from ${fromProjectId} to ${toProjectId}`);
+  return migratedMessages;
+}
+
 export async function clearProjectChatMessages(projectId: string) {
   await db.delete(chatMessages).where(eq(chatMessages.projectId, projectId));
 }

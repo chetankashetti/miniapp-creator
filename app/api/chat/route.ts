@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { saveChatMessage, createProject } from "../../../lib/database";
+import { saveChatMessage, createProject, migrateChatMessages } from "../../../lib/database";
 import { authenticateRequest } from "../../../lib/auth";
 import { db, chatMessages } from "../../../db";
 import { eq } from "drizzle-orm";
@@ -206,7 +206,7 @@ export async function POST(request: NextRequest) {
         try {
           const draftProject = await createProject(
             user.id,
-            `Chat Project ${sessionId.substring(0, 8)}`,
+            `Chat Project ${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`,
             "Chat conversation project",
             undefined
           );
@@ -369,6 +369,48 @@ export async function GET(request: NextRequest) {
     return NextResponse.json(
       {
         error: "Failed to retrieve chat messages",
+        details: error instanceof Error ? error.message : String(error),
+      },
+      { status: 500 }
+    );
+  }
+}
+
+// Migration endpoint for chat messages
+export async function PUT(request: NextRequest) {
+  try {
+    const { fromProjectId, toProjectId } = await request.json();
+
+    if (!fromProjectId || !toProjectId) {
+      return NextResponse.json(
+        { error: "Missing fromProjectId or toProjectId" },
+        { status: 400 }
+      );
+    }
+
+    // Authenticate the user
+    const { user, isAuthorized, error } = await authenticateRequest(request);
+    if (!isAuthorized || !user) {
+      return NextResponse.json(
+        { error: error || "Authentication required" },
+        { status: 401 }
+      );
+    }
+
+    // Migrate chat messages
+    const migratedMessages = await migrateChatMessages(fromProjectId, toProjectId);
+
+    return NextResponse.json({
+      success: true,
+      migratedCount: migratedMessages.length,
+      fromProjectId,
+      toProjectId,
+    });
+  } catch (error) {
+    console.error("Chat migration error:", error);
+    return NextResponse.json(
+      {
+        error: "Failed to migrate chat messages",
         details: error instanceof Error ? error.message : String(error),
       },
       { status: 500 }

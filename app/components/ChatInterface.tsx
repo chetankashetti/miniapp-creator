@@ -46,6 +46,7 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
 
     // Chat session state
     const [chatSessionId, setChatSessionId] = useState<string>('');
+    const [chatProjectId, setChatProjectId] = useState<string>(''); // Track the actual project ID where chat messages are stored
     const [currentPhase, setCurrentPhase] = useState<'requirements' | 'building' | 'editing'>('requirements');
 
     // Function to scroll to bottom of chat
@@ -65,7 +66,21 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
     // Load chat messages when project changes
     useEffect(() => {
         const loadChatMessages = async () => {
+            console.log('🔍 ChatInterface useEffect triggered:', { 
+                currentProject: currentProject?.projectId, 
+                sessionToken: !!sessionToken,
+                currentPhase 
+            });
+            
             if (currentProject?.projectId && sessionToken) {
+                // Set phase to 'editing' when an existing project is loaded
+                if (currentPhase !== 'editing') {
+                    console.log('🔍 Setting phase to editing for existing project:', currentProject.projectId);
+                    setCurrentPhase('editing');
+                } else {
+                    console.log('🔍 Phase already set to editing, skipping');
+                }
+                
                 try {
                     // Use the main chat API to get messages for this project
                     const response = await fetch(`/api/chat?projectId=${currentProject.projectId}`, {
@@ -88,6 +103,9 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
                 } catch (error) {
                     console.warn('Failed to load chat messages:', error);
                 }
+            } else if (!currentProject) {
+                // Reset phase to 'requirements' when no project is selected
+                setCurrentPhase('requirements');
             }
             
             // Add welcome message when no project or no messages
@@ -102,7 +120,7 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
         };
 
         loadChatMessages();
-    }, [currentProject?.projectId, sessionToken, aiLoading, chat.length]);
+    }, [currentProject?.projectId, sessionToken]);
 
     // Show warning message once when user hasn't started chatting
     useEffect(() => {
@@ -125,6 +143,7 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
         if (!chatSessionId || !sessionToken) return;
         // setPrompt('');
         setAiLoading(true);
+
 
         // setError(null);
 
@@ -233,6 +252,12 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
             // Handle non-streaming response for requirements/building phases
             const data = await response.json();
             const aiResponse = data.response;
+            
+            // Track the project ID where chat messages are stored
+            if (data.projectId && !chatProjectId) {
+                setChatProjectId(data.projectId);
+                console.log('📝 Chat messages stored in project:', data.projectId);
+            }
 
             // Add AI message to chat
             const aiMsg: ChatMessage = {
@@ -311,6 +336,36 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
                 throw new Error(errorMessage);
             }
             const project = await response.json();
+            
+            // Migrate chat messages from draft project to the new project
+            if (project.projectId && chatProjectId) {
+                try {
+                    console.log(`🔄 Migrating chat messages from ${chatProjectId} to ${project.projectId}`);
+                    const migrateResponse = await fetch('/api/chat', {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${sessionToken}` },
+                        body: JSON.stringify({ 
+                            fromProjectId: chatProjectId, 
+                            toProjectId: project.projectId 
+                        }),
+                    });
+                    
+                    if (migrateResponse.ok) {
+                        const migrateData = await migrateResponse.json();
+                        console.log(`✅ Chat messages migrated successfully: ${migrateData.migratedCount} messages`);
+                    } else {
+                        console.warn('⚠️ Failed to migrate chat messages:', await migrateResponse.text());
+                    }
+                } catch (error) {
+                    console.warn('⚠️ Error migrating chat messages:', error);
+                }
+            } else {
+                console.log('⚠️ Cannot migrate chat messages - missing project IDs:', { 
+                    newProjectId: project.projectId, 
+                    chatProjectId 
+                });
+            }
+            
             onProjectGenerated(project);
             setCurrentPhase('editing');
 
