@@ -347,13 +347,11 @@ export async function POST(request: NextRequest) {
     }
 
     const { prompt, useMultiStage = true } = await request.json();
-    const accessToken = (await headers())
-      .get("authorization")
-      ?.replace("Bearer ", "");
-
+    const accessToken = process.env.PREVIEW_AUTH_TOKEN;
+    console.log("🔑 Preview auth token:", accessToken);
     if (!accessToken) {
       return NextResponse.json(
-        { error: "Missing access token" },
+        { error: "Missing preview auth token" },
         { status: 401 }
       );
     }
@@ -651,13 +649,11 @@ export async function PATCH(request: NextRequest) {
     }
 
     const { projectId, prompt, stream = false, useDiffBased = true } = await request.json();
-    const accessToken = (await headers())
-      .get("authorization")
-      ?.replace("Bearer ", "");
-
+    const accessToken = process.env.PREVIEW_AUTH_TOKEN;
+    console.log("🔑 Preview auth token:", accessToken);
     if (!accessToken) {
       return NextResponse.json(
-        { error: "Missing access token" },
+        { error: "Missing preview auth token" },
         { status: 401 }
       );
     }

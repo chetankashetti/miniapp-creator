@@ -134,6 +134,18 @@ farcaster-miniapp/
 │   │   └── wagmi.ts                # Web3 configuration
 │   └── types/
 │       └── index.ts                # TypeScript definitions
+├── contracts/                      # Smart contract templates
+│   ├── ERC20Template.sol           # Secure ERC20 token template
+│   ├── ERC721Template.sol          # Secure ERC721 NFT template
+│   ├── EscrowTemplate.sol          # Secure escrow contract template
+│   ├── AIGeneratedToken.sol        # Generated token templates
+│   ├── AIGeneratedNFT.sol          # Generated NFT templates  
+│   ├── AIGeneratedEscrow.sol       # Generated escrow templates
+│   ├── MockERC20.sol               # Mock token for testing
+│   ├── hardhat.config.js           # Hardhat configuration
+│   ├── package.json                # Contract dependencies
+│   └── scripts/
+│       └── deploy.js               # Deployment script
 ├── package.json                    # Dependencies
 ├── next.config.ts                  # Next.js configuration
 ├── tsconfig.json                   # TypeScript configuration
@@ -156,6 +168,12 @@ const FARCASTER_BOILERPLATE_CONTEXT = {
       "Wagmi hooks: useReadContract, useWriteContract, useWaitForTransactionReceipt",
     environment: "Automatic environment detection (sdk.isInMiniApp())",
     navigation: "Tab-based single page application",
+    smartContracts: {
+      erc20: "ERC20Template.sol - Secure token template with minting, burning, pausable",
+      erc721: "ERC721Template.sol - Secure NFT template with metadata, enumerable, batch minting",
+      escrow: "EscrowTemplate.sol - Secure escrow with dispute resolution, multi-token support",
+      security: "All templates use OpenZeppelin standards with access controls and reentrancy protection"
+    },
   },
   constraints: {
     mobileFirst: "375px width, touch targets ≥44px",
@@ -554,7 +572,12 @@ PLANNING RULES:
 - Describe implementation requirements without writing actual code
 - Include dependencies and contract interactions where relevant
 - Ensure all required files are covered with detailed change descriptions
-- If blockchain functionality is requested, specify contract interaction types and functions
+- If blockchain functionality is requested, specify contract interaction types and functions using the pre-vetted templates:
+  * Reference ERC20Template.sol for token functionality
+  * Reference ERC721Template.sol for NFT functionality  
+  * Reference EscrowTemplate.sol for payment/escrow functionality
+  * Always specify which template to use and how to modify it
+  * ALWAYS include a patch for contracts/scripts/deploy.js to deploy the specific contract
 - Provide implementation notes for Stage 3 guidance
 - Return valid JSON only
 - Every patch must have a valid changes array with descriptions
@@ -728,7 +751,11 @@ PLANNING RULES:
 - Describe implementation requirements without writing actual code
 - Include dependencies and contract interactions where relevant
 - Ensure all required files are covered with detailed change descriptions
-- If blockchain functionality is requested, specify contract interaction types and functions
+- If blockchain functionality is requested, specify contract interaction types and functions using the pre-vetted templates:
+  * Reference ERC20Template.sol for token functionality
+  * Reference ERC721Template.sol for NFT functionality  
+  * Reference EscrowTemplate.sol for payment/escrow functionality
+  * Always specify which template to use and how to modify it
 - Provide implementation notes for Stage 3 guidance
 - Return valid JSON only
 - Every patch must have a valid changes array with descriptions
@@ -769,28 +796,11 @@ ${JSON.stringify(FARCASTER_BOILERPLATE_CONTEXT, null, 2)}
 
 TASK: Generate complete file contents based on the detailed patch plan for initial project generation
 
-INITIAL GENERATION APPROACH:
-- Generate complete file contents rather than diffs
-- Focus on implementing the full functionality described in the patch plan
-- Create comprehensive, working code files
-- No need for diff hunks or unified diffs - generate complete files
-
-IMPLEMENTATION GUIDANCE FROM PATCH PLAN:
-- Follow the "purpose" field for each file to understand the overall goal
-- Use the "description" field in each change to understand exactly what to implement
-- Use the "location" field to know where in the file to place the code
-- Use the "dependencies" field to ensure all required imports and hooks are included
-- Use the "contractInteraction" field to implement blockchain functionality correctly
-- Follow the "implementationNotes" for overall implementation approach
-
-FARCASTER REQUIREMENTS FOR MAIN PAGE:
-- Mobile-first design (~375px width) with tab-based layout
-- Single page app structure (all content in tab components within src/app/page.tsx)
-- For contract interactions use wagmi hooks with address from useAccount hook from wagmi
-- Do not change wagmi.ts file - it has everything you need
-- Do not edit package.json unless absolutely necessary
-- The app automatically works in both Farcaster miniapp and browser environments
-- The Mini App SDK exposes an EIP-1193 Ethereum Provider API at sdk.wallet.getEthereumProvider()
+GENERATION APPROACH:
+- Generate complete file contents (not diffs) for initial generation
+- Follow patch plan fields: purpose, description, location, dependencies, contractInteraction
+- Mobile-first design (~375px) with tab-based layout in src/app/page.tsx
+- Use wagmi hooks for contract interactions, don't modify wagmi.ts or package.json
 
 CRITICAL: Return ONLY valid JSON. Surround the JSON with EXACT markers:
 __START_JSON__
@@ -808,24 +818,32 @@ __START_JSON__
   }
 ]
 __END_JSON__
+Nothing else before/after the markers. Do not include any explanatory text, comments, or additional content outside the JSON markers.
 
-CODE GENERATION RULES - INITIAL GENERATION:
+JSON FORMATTING:
+- Escape quotes as \\\", newlines as \\n, backslashes as \\\\
+- Example: "content": "import { useState } from \\\"react\\\";\\n\\nconst Component = () => {\\n  return <div>Hello</div>;\\n};"
+
+CODE GENERATION RULES:
 - Generate complete file contents based on patch plan descriptions
-- Use useUser hook from @/hooks for user data: const { username, fid, isMiniApp, isLoading } = useUser()
+- Use useUser hook: const { username, fid, isMiniApp, isLoading } = useUser()
 - Use Tabs component from @/components/ui/Tabs for navigation
-- Follow patch plan "purpose" and "description" fields exactly
-- Implement code in the exact "location" specified in the patch plan
-- Include all "dependencies" listed in the patch plan
-- Implement "contractInteraction" functionality when specified
-- Follow "implementationNotes" for overall approach
-- Include all required imports based on dependencies
-- Prefer neutral colors (grays, whites, blacks) with subtle accents
-- Use consistent spacing, typography, and visual hierarchy
-- Ensure good contrast and accessibility
-- Use subtle shadows and borders for depth when appropriate
-- If blockchain functionality is requested, include smart contract code in solidity and have a placeholder for the contract address and abi
-- Return valid JSON array only
-- NO EXPLANATIONS, NO TEXT, ONLY JSON
+- Follow patch plan fields exactly (purpose, description, location, dependencies)
+- Include all required imports and implement contract interactions when specified
+- Prefer neutral colors with subtle accents, ensure good contrast and accessibility
+
+SOLIDITY DOCUMENTATION (CRITICAL):
+- For functions with multiple return values, use separate @return tags for each parameter
+- Example: @return id Poll ID, @return question Poll question, @return options Poll options array
+- NEVER use generic @return descriptions like "@return Poll data" - always specify each return parameter
+- Each @return tag must match the function's return parameters in order
+
+ESLINT COMPLIANCE (CRITICAL):
+- Remove unused variables from destructuring: const { used, unused } = hook() → const { used } = hook()
+- Include all dependencies in useEffect: useEffect(() => { fn(); }, [fn])
+- Use useCallback for functions in useEffect deps: const fn = useCallback(() => {}, [deps])
+BLOCKCHAIN: Use pre-vetted templates (ERC20Template.sol, ERC721Template.sol, EscrowTemplate.sol), modify contracts/scripts/deploy.js, include ABI placeholders
+- Return valid JSON array only - NO EXPLANATIONS, NO TEXT, ONLY JSON
 
 REMEMBER: Return ONLY the JSON array above surrounded by __START_JSON__ and __END_JSON__ markers. No other text, no explanations, no markdown formatting.
 `;
@@ -909,27 +927,38 @@ __START_JSON__
   }
 ]
 __END_JSON__
+Nothing else before/after the markers. Do not include any explanatory text, comments, or additional content outside the JSON markers.
 
-CODE GENERATION RULES - FOLLOW-UP CHANGES:
-- For existing files: Modify the current file content based on the patch plan
+JSON FORMATTING REQUIREMENTS:
+- ALL quotes inside content strings MUST be escaped as \\\" (double backslash + quote)
+- ALL newlines inside content strings MUST be escaped as \\n
+- ALL backslashes must be escaped as \\\\
+- Content must be a single-line string with proper escaping
+- unifiedDiff content must also be properly escaped
+- Example: "content": "const { ethers } = require(\\\"hardhat\\\");\\n\\nasync function main() {\\n  console.log(\\\"Hello\\\");\\n}"
+
+CODE GENERATION RULES:
+- For existing files: Modify current content based on patch plan
 - For new files: Generate complete file contents based on patch plan descriptions
-- Use useUser hook from @/hooks for user data: const { username, fid, isMiniApp, isLoading } = useUser()
+- Use useUser hook: const { username, fid, isMiniApp, isLoading } = useUser()
 - Use Tabs component from @/components/ui/Tabs for navigation
-- Follow patch plan "purpose" and "description" fields exactly
-- Implement code in the exact "location" specified in the patch plan
-- Include all "dependencies" listed in the patch plan
-- Implement "contractInteraction" functionality when specified
-- Follow "implementationNotes" for overall approach
-- Include all required imports based on dependencies
-- Preserve existing code structure and styling when modifying files
-- Only change what's specified in the patch plan - keep other parts intact
-- Prefer neutral colors (grays, whites, blacks) with subtle accents
-- Use consistent spacing, typography, and visual hierarchy
-- Ensure good contrast and accessibility
-- Use subtle shadows and borders for depth when appropriate
-- If blockchain functionality is requested, include smart contract code in solidity and have a placeholder for the contract address and abi
-- Return valid JSON array only
-- NO EXPLANATIONS, NO TEXT, ONLY JSON
+- Follow patch plan fields exactly (purpose, description, location, dependencies)
+- Include all required imports and implement contract interactions when specified
+- Preserve existing code structure when modifying files
+- Prefer neutral colors with subtle accents, ensure good contrast and accessibility
+
+SOLIDITY DOCUMENTATION (CRITICAL):
+- For functions with multiple return values, use separate @return tags for each parameter
+- Example: @return id Poll ID, @return question Poll question, @return options Poll options array
+- NEVER use generic @return descriptions like "@return Poll data" - always specify each return parameter
+- Each @return tag must match the function's return parameters in order
+
+ESLINT COMPLIANCE (CRITICAL):
+- Remove unused variables from destructuring: const { used, unused } = hook() → const { used } = hook()
+- Include all dependencies in useEffect: useEffect(() => { fn(); }, [fn])
+- Use useCallback for functions in useEffect deps: const fn = useCallback(() => {}, [deps])
+BLOCKCHAIN: Use pre-vetted templates (ERC20Template.sol, ERC721Template.sol, EscrowTemplate.sol), modify contracts/scripts/deploy.js, include ABI placeholders
+- Return valid JSON array only - NO EXPLANATIONS, NO TEXT, ONLY JSON
 
 REMEMBER: Return ONLY the JSON array above surrounded by __START_JSON__ and __END_JSON__ markers. No other text, no explanations, no markdown formatting.
 `;

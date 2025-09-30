@@ -49,6 +49,7 @@ export async function createPreview(
       body: JSON.stringify({
         hash: projectId,
         files: filesObject,
+        deployToExternal: "vercel",
       }),
     });
 
@@ -64,13 +65,12 @@ export async function createPreview(
     // Map the API response to our PreviewResponse format
     const previewData: PreviewResponse = {
       url:
-        `http://${apiResponse.previewUrl}` ||
+        apiResponse.previewUrl ||
+        apiResponse.vercelUrl ||
         `https://${projectId}.minidev.fun`,
       status: apiResponse.isNewDeployment ? "deployed" : "updated",
       port: 3000, // Default port for Next.js apps
-      previewUrl: apiResponse.previewUrl
-        ? `http://${apiResponse.previewUrl}`
-        : "",
+      previewUrl: apiResponse.previewUrl,
       vercelUrl: apiResponse.vercelUrl,
       aliasSuccess: apiResponse.aliasSuccess,
       isNewDeployment: apiResponse.isNewDeployment,
@@ -80,7 +80,7 @@ export async function createPreview(
     // Store the preview info
     activePreviews.set(projectId, previewData);
 
-    console.log(`✅ Preview created successfully: ${previewData.url}`);
+    console.log(`✅ Vercel deployment created successfully: ${previewData.url}`);
     console.log(`📊 Preview URL: ${previewData.previewUrl}`);
     console.log(`🌐 Vercel URL: ${previewData.vercelUrl}`);
     console.log(`📦 Package Changes: ${previewData.hasPackageChanges}`);

@@ -43,45 +43,27 @@ describe('diffUtils', () => {
   describe('applyDiffToContent', () => {
     it('should apply diff with addition', () => {
       const original = 'line1\nline2\nline3';
-      const hunks = [{
-        oldStart: 3,
-        oldLines: 0,
-        newStart: 3,
-        newLines: 1,
-        lines: ['+line4']
-      }];
+      const unifiedDiff = '@@ -3,0 +3,1 @@\n+line4';
 
-      const result = applyDiffToContent(original, hunks);
+      const result = applyDiffToContent(original, unifiedDiff);
 
       expect(result).toBe('line1\nline2\nline3\nline4');
     });
 
     it('should apply diff with deletion', () => {
       const original = 'line1\nline2\nline3';
-      const hunks = [{
-        oldStart: 2,
-        oldLines: 1,
-        newStart: 2,
-        newLines: 0,
-        lines: ['-line2']
-      }];
+      const unifiedDiff = '@@ -2,1 +2,0 @@\n-line2';
 
-      const result = applyDiffToContent(original, hunks);
+      const result = applyDiffToContent(original, unifiedDiff);
 
       expect(result).toBe('line1\nline3');
     });
 
     it('should apply diff with modification', () => {
       const original = 'line1\nline2\nline3';
-      const hunks = [{
-        oldStart: 2,
-        oldLines: 1,
-        newStart: 2,
-        newLines: 1,
-        lines: ['-line2', '+modified line2']
-      }];
+      const unifiedDiff = '@@ -2,1 +2,1 @@\n-line2\n+modified line2';
 
-      const result = applyDiffToContent(original, hunks);
+      const result = applyDiffToContent(original, unifiedDiff);
 
       expect(result).toBe('line1\nmodified line2\nline3');
     });

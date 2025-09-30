@@ -246,7 +246,17 @@ export function parseStage3CodeResponse(responseText: string): any[] {
     try {
       return tryParseJsonText(candidate);
     } catch (e) {
-      console.warn('Stage 3: Parsing between markers failed:', e);
+      console.warn('Stage 3: Parsing between markers failed, attempting repairs:', e);
+      
+      // Attempt JSON repair
+      const repaired = repairJsonArray(candidate);
+      if (repaired) {
+        try {
+          return tryParseJsonText(repaired);
+        } catch (repairError) {
+          console.warn('Stage 3: JSON repair also failed:', repairError);
+        }
+      }
     }
   }
 
@@ -265,6 +275,63 @@ export function parseStage3CodeResponse(responseText: string): any[] {
     return JSON.parse(responseText);
   } catch (e) {
     throw new Error('Stage 3: All JSON parsing strategies failed');
+  }
+}
+
+/**
+ * Attempt to repair common JSON malformation issues
+ */
+function repairJsonArray(jsonText: string): string | null {
+  try {
+    let repaired = jsonText.trim();
+    
+    // Fix malformed content strings with unescaped quotes and newlines
+    // This is the most common issue with Stage 3 responses
+    
+    // Fix unescaped quotes in content fields
+    // Pattern: "content": "some text with "quotes" and 'quotes'"
+    repaired = repaired.replace(
+      /("content"\s*:\s*")([^"\\\\]*(?:\\\\.[^"\\\\]*)*)(")(?=[^"]*(?:"[^"]*"[^"]*)*}])/g,
+      (match, prefix, content, suffix) => {
+        // Escape any unescaped quotes inside the content
+        const escapedContent = content
+          .replace(/(?<!\\)"/g, '\\"')
+          .replace(/\n/g, '\\n')
+          .replace(/\r/g, '\\r')
+          .replace(/\t/g, '\\t');
+        return prefix + escapedContent + suffix;
+      }
+    );
+    
+    // Fix malformed ending patterns
+    // [{"filename":"...","content":"..."} -> [{"filename":"...","content":"..."}]
+    if (repaired.endsWith('}') && !repaired.endsWith('}]')) {
+      repaired = repaired + ']';
+    }
+    
+    // Remove any extra closing braces before final ]
+    if (repaired.includes('}]')) {
+      repaired = repaired.replace(/}+(?=\s*])/g, '');
+    }
+    
+    // Fix malformed unifiedDiff content escaping
+    repaired = repaired.replace(
+      /("unifiedDiff"\s*:\s*")([^"\\\\]*(?:\\\\.[^"\\\\]*)*)(")/g,
+      (match, prefix, content, suffix) => {
+        const escapedContent = content
+          .replace(/(?<!\\)"/g, '\\"')
+          .replace(/\n/g, '\\n')
+          .replace(/\r/g, '\\r')
+          .replace(/\t/g, '\\t');
+        return prefix + escapedContent + suffix;
+      }
+    );
+    
+    // Try parsing the repaired JSON
+    JSON.parse(repaired);
+    return repaired;
+  } catch (e) {
+    return null;
   }
 }
 

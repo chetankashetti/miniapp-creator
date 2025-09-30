@@ -70,12 +70,10 @@ export async function executeDiffBasedPipeline(
         'Stage 0: Context Gatherer',
         'STAGE_0_CONTEXT_GATHERER'
       );
-      console.log('🔍 Context response:', contextResponse);
       // Parse context response
       let contextData;
       try {
         contextData = JSON.parse(contextResponse);
-        console.log('🔍 Context data:', contextData);
         contextGathered = contextData;
       } catch (error) {
         console.warn('⚠️ Context gathering response is not valid JSON, skipping context:', error);
@@ -101,17 +99,17 @@ export async function executeDiffBasedPipeline(
     }
   }
 
-        // Use the multi-stage pipeline with diff-based prompts (isInitialGeneration = false)
-        console.log('🔄 Using multi-stage pipeline for diff-based changes');
-        const pipelineResult = await executeMultiStagePipeline(
-          userPrompt,
-          currentFiles,
-          callLLM,
-          projectId,
-          false // isInitialGeneration = false for follow-up changes
-        );
+  // Use the multi-stage pipeline with diff-based prompts (isInitialGeneration = false)
+  console.log('🔄 Using multi-stage pipeline for diff-based changes');
+  const pipelineResult = await executeMultiStagePipeline(
+    userPrompt,
+    currentFiles,
+    callLLM,
+    projectId,
+    false // isInitialGeneration = false for follow-up changes
+  );
 
-        const generatedFilesFromPipeline = pipelineResult.files;
+  const generatedFilesFromPipeline = pipelineResult.files;
 
   // Process the generated files and extract diffs
   for (const file of generatedFilesFromPipeline) {
