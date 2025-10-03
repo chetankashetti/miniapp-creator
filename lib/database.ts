@@ -120,23 +120,31 @@ export async function updateProjectFile(projectId: string, filename: string, con
 }
 
 // Patch management
-// export async function savePatch(
-//   projectId: string,
-//   patchData: any,
-//   description?: string
-// ) {
-//   const [patch] = await db.insert(projectPatches).values({
-//     projectId,
-//     patchData,
-//     description,
-//   }).returning();
-//   return patch;
-// }
+export async function savePatch(
+  projectId: string,
+  patchData: any,
+  description?: string
+) {
+  const [patch] = await db.insert(projectPatches).values({
+    projectId,
+    patchData,
+    description,
+  }).returning();
+  return patch;
+}
 
 export async function getProjectPatches(projectId: string) {
   return await db.select().from(projectPatches)
     .where(eq(projectPatches.projectId, projectId))
     .orderBy(desc(projectPatches.appliedAt));
+}
+
+export async function revertPatch(patchId: string) {
+  const [patch] = await db.update(projectPatches)
+    .set({ revertedAt: new Date() })
+    .where(eq(projectPatches.id, patchId))
+    .returning();
+  return patch;
 }
 
 // Deployment management

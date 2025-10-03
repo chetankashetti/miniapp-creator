@@ -411,10 +411,27 @@ export function parseJsonResponse(responseText: string, stageName: string = 'Unk
  * Check if response appears to be truncated
  */
 export function isResponseTruncated(responseText: string): boolean {
-  return responseText.includes('"patches": [') && 
+  // Check for Stage 2 truncation (patch planner)
+  const isStage2Truncated = responseText.includes('"patches": [') && 
     !responseText.includes('__END_JSON__') && 
     !responseText.trim().endsWith('}') && 
     !responseText.trim().endsWith(']');
+  
+  // Check for Stage 3 truncation (code generator)
+  const isStage3Truncated = responseText.includes('__START_JSON__') && 
+    responseText.includes('[') && 
+    !responseText.includes('__END_JSON__') && 
+    !responseText.trim().endsWith(']') &&
+    !responseText.trim().endsWith('}');
+  
+  // Check for general JSON truncation (missing closing brackets)
+  const hasStartJson = responseText.includes('__START_JSON__');
+  const hasEndJson = responseText.includes('__END_JSON__');
+  const endsProperly = responseText.trim().endsWith(']') || responseText.trim().endsWith('}');
+  
+  const isGeneralTruncated = hasStartJson && !hasEndJson && !endsProperly;
+  
+  return isStage2Truncated || isStage3Truncated || isGeneralTruncated;
 }
 
 /**

@@ -81,9 +81,9 @@ export const STAGE_MODEL_CONFIG = {
   STAGE_3_CODE_GENERATOR: {
     model: ANTHROPIC_MODELS.POWERFUL,
     fallbackModel: ANTHROPIC_MODELS.BALANCED, // Use regular Sonnet if latest Sonnet is overloaded
-    maxTokens: 20000,
+    maxTokens: 40000,
     temperature: 0.1,
-    reason: "Complex code generation, needs highest quality",
+    reason: "Complex code generation, needs highest quality and more tokens for large projects",
   },
   STAGE_4_VALIDATOR: {
     model: ANTHROPIC_MODELS.POWERFUL,
@@ -138,10 +138,6 @@ farcaster-miniapp/
 │   ├── ERC20Template.sol           # Secure ERC20 token template
 │   ├── ERC721Template.sol          # Secure ERC721 NFT template
 │   ├── EscrowTemplate.sol          # Secure escrow contract template
-│   ├── AIGeneratedToken.sol        # Generated token templates
-│   ├── AIGeneratedNFT.sol          # Generated NFT templates  
-│   ├── AIGeneratedEscrow.sol       # Generated escrow templates
-│   ├── MockERC20.sol               # Mock token for testing
 │   ├── hardhat.config.js           # Hardhat configuration
 │   ├── package.json                # Contract dependencies
 │   └── scripts/
@@ -393,6 +389,7 @@ RULES:
 - Analyze user intent carefully
 - Identify required files to modify (empty array if no changes needed)
 - List all npm dependencies needed (empty array if no changes needed)
+- For IPFS/storage: use "web3.storage" (not @web3-storage/web3-storage)
 - Specify contract interactions if any
 - Provide clear reason for decision
 - Return valid JSON only
@@ -832,16 +829,43 @@ CODE GENERATION RULES:
 - Include all required imports and implement contract interactions when specified
 - Prefer neutral colors with subtle accents, ensure good contrast and accessibility
 
+FARCASTER AUTHENTICATION (CRITICAL - MUST PRESERVE):
+- ALWAYS import and keep ConnectWallet: import { ConnectWallet } from '@/components/wallet/ConnectWallet';
+- ALWAYS render ConnectWallet for non-miniapp users: {!isMiniApp && <ConnectWallet />}
+- ALWAYS use useUser hook to detect miniapp vs browser: const { isMiniApp, username, address } = useUser();
+- ALWAYS show loading state: if (isLoading) return <div>Loading...</div>;
+- ALWAYS handle both Farcaster miniapp AND browser wallet modes
+- For miniapp users: Show username, fid, displayName from useUser()
+- For browser users: Show ConnectWallet button and address from useUser()
+- NEVER remove authentication logic even if user doesn't explicitly mention it
+- Example pattern MUST be preserved:
+  {isMiniApp ? (
+    <div>Welcome @{username}</div>
+  ) : (
+    <ConnectWallet />
+  )}
+
 SOLIDITY DOCUMENTATION (CRITICAL):
 - For functions with multiple return values, use separate @return tags for each parameter
 - Example: @return id Poll ID, @return question Poll question, @return options Poll options array
 - NEVER use generic @return descriptions like "@return Poll data" - always specify each return parameter
 - Each @return tag must match the function's return parameters in order
 
-ESLINT COMPLIANCE (CRITICAL):
+ESLINT COMPLIANCE (CRITICAL - BUILD WILL FAIL IF VIOLATED):
 - Remove unused variables from destructuring: const { used, unused } = hook() → const { used } = hook()
+- Remove unused imports: import { used, unused } from 'module' → import { used } from 'module'
 - Include all dependencies in useEffect: useEffect(() => { fn(); }, [fn])
 - Use useCallback for functions in useEffect deps: const fn = useCallback(() => {}, [deps])
+- Include ALL dependencies in useCallback hooks: useCallback(() => { doSomething(dep1, dep2); }, [dep1, dep2])
+- Never declare variables that aren't used in the component
+- Never import modules that aren't used in the component
+- Always use all imported modules and declared variables
+- NEVER call React hooks inside callbacks, loops, or conditions: use hooks only at the top level of components
+- Use for loops instead of Array.from() when calling hooks: for (let i = 0; i < count; i++) { useHook() }
+- Use const instead of let when variables are never reassigned: let x = 5 → const x = 5
+- Escape JSX entities: use &apos; for apostrophes, &quot; for quotes, &amp; for ampersands
+- NEVER use 'let' for variables that are never reassigned - ALWAYS use 'const' (prefer-const rule)
+- React Hook dependencies: Include ALL values from component scope (props, state, context) that are used inside the callback
 BLOCKCHAIN: Use pre-vetted templates (ERC20Template.sol, ERC721Template.sol, EscrowTemplate.sol), modify contracts/scripts/deploy.js, include ABI placeholders
 - Return valid JSON array only - NO EXPLANATIONS, NO TEXT, ONLY JSON
 
@@ -947,16 +971,45 @@ CODE GENERATION RULES:
 - Preserve existing code structure when modifying files
 - Prefer neutral colors with subtle accents, ensure good contrast and accessibility
 
+FARCASTER AUTHENTICATION (CRITICAL - MUST PRESERVE):
+- ALWAYS import and keep ConnectWallet: import { ConnectWallet } from '@/components/wallet/ConnectWallet';
+- ALWAYS render ConnectWallet for non-miniapp users: {!isMiniApp && <ConnectWallet />}
+- ALWAYS use useUser hook to detect miniapp vs browser: const { isMiniApp, username, address } = useUser();
+- ALWAYS show loading state: if (isLoading) return <div>Loading...</div>;
+- ALWAYS handle both Farcaster miniapp AND browser wallet modes
+- For miniapp users: Show username, fid, displayName from useUser()
+- For browser users: Show ConnectWallet button and address from useUser()
+- NEVER remove authentication logic even if user doesn't explicitly mention it
+- NEVER delete or modify ConnectWallet import or rendering logic
+- When modifying page.tsx, PRESERVE the conditional rendering pattern for miniapp vs browser
+- Example pattern MUST be preserved:
+  {isMiniApp ? (
+    <div>Welcome @{username}</div>
+  ) : (
+    <ConnectWallet />
+  )}
+
 SOLIDITY DOCUMENTATION (CRITICAL):
 - For functions with multiple return values, use separate @return tags for each parameter
 - Example: @return id Poll ID, @return question Poll question, @return options Poll options array
 - NEVER use generic @return descriptions like "@return Poll data" - always specify each return parameter
 - Each @return tag must match the function's return parameters in order
 
-ESLINT COMPLIANCE (CRITICAL):
+ESLINT COMPLIANCE (CRITICAL - BUILD WILL FAIL IF VIOLATED):
 - Remove unused variables from destructuring: const { used, unused } = hook() → const { used } = hook()
+- Remove unused imports: import { used, unused } from 'module' → import { used } from 'module'
 - Include all dependencies in useEffect: useEffect(() => { fn(); }, [fn])
 - Use useCallback for functions in useEffect deps: const fn = useCallback(() => {}, [deps])
+- Include ALL dependencies in useCallback hooks: useCallback(() => { doSomething(dep1, dep2); }, [dep1, dep2])
+- Never declare variables that aren't used in the component
+- Never import modules that aren't used in the component
+- Always use all imported modules and declared variables
+- NEVER call React hooks inside callbacks, loops, or conditions: use hooks only at the top level of components
+- Use for loops instead of Array.from() when calling hooks: for (let i = 0; i < count; i++) { useHook() }
+- Use const instead of let when variables are never reassigned: let x = 5 → const x = 5
+- Escape JSX entities: use &apos; for apostrophes, &quot; for quotes, &amp; for ampersands
+- NEVER use 'let' for variables that are never reassigned - ALWAYS use 'const' (prefer-const rule)
+- React Hook dependencies: Include ALL values from component scope (props, state, context) that are used inside the callback
 BLOCKCHAIN: Use pre-vetted templates (ERC20Template.sol, ERC721Template.sol, EscrowTemplate.sol), modify contracts/scripts/deploy.js, include ABI placeholders
 - Return valid JSON array only - NO EXPLANATIONS, NO TEXT, ONLY JSON
 
@@ -1047,6 +1100,17 @@ CRITICAL FIXES ONLY:
    - Fix missing imports
    - Fix circular dependencies
    - Fix invalid file structure
+
+4. ESLINT ERRORS:
+   - Fix unused variables (@typescript-eslint/no-unused-vars)
+   - Fix unused imports (@typescript-eslint/no-unused-vars)
+   - Fix missing useEffect dependencies (react-hooks/exhaustive-deps)
+   - Fix React hooks rules violations (react-hooks/rules-of-hooks)
+   - Fix unescaped entities in JSX (react/no-unescaped-entities)
+   - Remove any unused destructured variables
+   - Remove any unused imported modules
+   - Replace Array.from() with for loops when calling hooks
+   - Escape apostrophes (&apos;), quotes (&quot;), and ampersands (&amp;) in JSX
 
 RULES:
 - Return EXACTLY the same filenames provided
@@ -1422,6 +1486,25 @@ function validateReactIssues(files: { filename: string; content?: string; unifie
         error: "JSX with React hooks needs 'use client' directive",
       });
     }
+
+    // Check for React hooks rules violations
+    const hasHooksInArrayFrom = /Array\.from\([^)]*\)[^}]*use[A-Z][a-zA-Z]*/g.test(contentToAnalyze);
+    if (hasHooksInArrayFrom) {
+      reactErrors.push({
+        file: file.filename,
+        error: "React hooks cannot be called inside Array.from() - use for loops instead",
+      });
+    }
+
+    // Check for unescaped entities in JSX
+    const hasUnescapedApostrophe = /[^&]'[^;]/g.test(contentToAnalyze);
+    const hasUnescapedQuote = /[^&]"[^;]/g.test(contentToAnalyze);
+    if (hasUnescapedApostrophe || hasUnescapedQuote) {
+      reactErrors.push({
+        file: file.filename,
+        error: "Unescaped entities in JSX - use &apos; for apostrophes and &quot; for quotes",
+      });
+    }
   });
 
   return { reactErrors };
@@ -1745,20 +1828,67 @@ export async function executeMultiStagePipeline(
     console.log("Response Length:", codeResponse.length, "chars");
     console.log("Response Time:", endTime3 - startTime3, "ms");
     console.log("Raw Response:", codeResponse.substring(0, 500) + "...");
+    
+    // Log Stage 3 specific metrics
+    console.log("📊 Stage 3 Metrics:");
+    console.log(`    Patches to Process: ${patchPlan.patches.length}`);
+    console.log(`    Estimated Files: ${patchPlan.patches.filter(p => p.operation === 'create').length} new, ${patchPlan.patches.filter(p => p.operation === 'modify').length} modified`);
+    console.log(`    Response Efficiency: ${codeResponse.length > 0 ? (codeResponse.length / (endTime3 - startTime3) * 1000).toFixed(2) : 'N/A'} chars/sec`);
 
     let generatedFiles: { filename: string; content?: string; unifiedDiff?: string; operation?: string; diffHunks?: DiffHunk[] }[];
     
-    // Use the extracted parser utility
+    // Use the extracted parser utility with retry logic for truncated responses
     try {
       generatedFiles = parseStage3CodeResponse(codeResponse);
     } catch (error) {
       console.error("❌ Failed to parse Stage 3 response as JSON:");
       console.error("Raw response:", codeResponse);
-      throw new Error(
-        `Stage 3 JSON parsing failed: ${
-          error instanceof Error ? error.message : String(error)
-        }`
-      );
+      
+      // Check if response appears to be truncated
+      if (isResponseTruncated(codeResponse)) {
+        console.log("🔄 Response appears truncated, retrying with larger token limit...");
+        
+        // Retry with increased token limit
+        const retryConfig = {
+          ...STAGE_MODEL_CONFIG.STAGE_3_CODE_GENERATOR,
+          maxTokens: Math.min(STAGE_MODEL_CONFIG.STAGE_3_CODE_GENERATOR.maxTokens * 2, 80000)
+        };
+        
+        console.log(`📈 Retrying with ${retryConfig.maxTokens} tokens (was ${STAGE_MODEL_CONFIG.STAGE_3_CODE_GENERATOR.maxTokens})`);
+        
+        const retryResponse = await callLLM(
+          getStage3CodeGeneratorPrompt(patchPlan, intentSpec, currentFiles, isInitialGeneration),
+          codePrompt,
+          "Stage 3: Code Generator (Retry)",
+          "STAGE_3_CODE_GENERATOR"
+        );
+        
+        try {
+          generatedFiles = parseStage3CodeResponse(retryResponse);
+          console.log("✅ Retry successful with larger token limit");
+          console.log("📊 Retry Metrics:");
+          console.log(`    Retry Response Length: ${retryResponse.length} chars`);
+          console.log(`    Retry Token Limit: ${retryConfig.maxTokens} tokens`);
+          console.log(`    Retry Success Rate: 100%`);
+        } catch (retryError) {
+          console.error("❌ Retry also failed:", retryError);
+          console.log("📊 Retry Failure Metrics:");
+          console.log(`    Retry Response Length: ${retryResponse.length} chars`);
+          console.log(`    Retry Token Limit: ${retryConfig.maxTokens} tokens`);
+          console.log(`    Retry Success Rate: 0%`);
+          throw new Error(
+            `Stage 3 JSON parsing failed even with retry: ${
+              retryError instanceof Error ? retryError.message : String(retryError)
+            }`
+          );
+        }
+      } else {
+        throw new Error(
+          `Stage 3 JSON parsing failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        );
+      }
     }
 
     // Validate generated files structure

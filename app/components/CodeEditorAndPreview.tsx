@@ -5,6 +5,7 @@ import { CodeEditor } from './CodeEditor';
 import { Preview } from './Preview';
 import { DevelopmentLogs } from './DevelopmentLogs';
 import { PublishModal } from './PublishModal';
+import { PatchHistory } from './PatchHistory';
 
 interface GeneratedProject {
     projectId: string;
@@ -37,7 +38,7 @@ interface CodeEditorAndPreviewProps {
     onNewProject?: () => void;
 }
 
-type ViewMode = 'code' | 'preview';
+type ViewMode = 'code' | 'preview' | 'history';
 
 export function CodeEditorAndPreview({
     currentProject,
@@ -75,6 +76,12 @@ export function CodeEditorAndPreview({
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
                 </svg>
             );
+        case 'history':
+            return (
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+            );
         }
     };
 
@@ -84,6 +91,8 @@ export function CodeEditorAndPreview({
             return 'Code';
         case 'preview':
             return 'Preview';
+        case 'history':
+            return 'History';
         }
     };
 
@@ -106,7 +115,7 @@ export function CodeEditorAndPreview({
             <div className="flex items-center justify-between p-4 border-b border-black-10 bg-white">
                 {/* Left side - Toggle icons */}
                 <div className="flex items-center gap-1 bg-black-5 rounded-lg p-1">
-                    {(['code', 'preview'] as ViewMode[]).map((mode) => (
+                    {(['code', 'preview', 'history'] as ViewMode[]).map((mode) => (
                         <button
                             key={mode}
                             onClick={() => setViewMode(mode)}
@@ -115,6 +124,7 @@ export function CodeEditorAndPreview({
                                 : 'text-black-60 hover:text-black hover:bg-black-10'
                                 }`}
                             title={`${getViewModeLabel(mode)} view`}
+                            disabled={mode === 'history' && !currentProject}
                         >
                             {getViewModeIcon(mode)}
                         </button>
@@ -188,11 +198,18 @@ export function CodeEditorAndPreview({
 
                 {/* Always render Preview but hide when not in preview mode */}
                 <div className={`h-full ${viewMode === 'preview' ? 'block' : 'hidden'}`}>
-                    <Preview 
-                        currentProject={currentProject} 
+                    <Preview
+                        currentProject={currentProject}
                         onProjectSelect={onProjectSelect}
                         onNewProject={onNewProject}
                     />
+                </div>
+
+                {/* Render PatchHistory when in history mode */}
+                <div className={`h-full ${viewMode === 'history' ? 'block' : 'hidden'}`}>
+                    {currentProject && (
+                        <PatchHistory projectId={currentProject.projectId} />
+                    )}
                 </div>
             </div>
 

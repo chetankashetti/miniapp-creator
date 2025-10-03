@@ -30,6 +30,9 @@ export async function createPreview(
   accessToken: string
 ): Promise<PreviewResponse> {
   console.log(`🚀 Creating preview for project: ${projectId}`);
+  console.log(`📁 Files count: ${files.length}`);
+  console.log(`🔑 Access token: ${accessToken ? 'Present' : 'Missing'}`);
+  console.log(`🌐 Preview API Base: ${PREVIEW_API_BASE}`);
 
   try {
     // Convert files array to object format expected by the API
@@ -38,57 +41,134 @@ export async function createPreview(
       filesObject[file.filename] = file.content;
     });
 
-    // Make API request to create preview
-    const response = await fetch(`${PREVIEW_API_BASE}/deploy`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-        // Authorization: `Bearer ${PREVIEW_API_TOKEN}`,
-      },
-      body: JSON.stringify({
-        hash: projectId,
-        files: filesObject,
-        deployToExternal: "vercel",
-      }),
-    });
+    console.log(`📦 Converted ${Object.keys(filesObject).length} files to object format`);
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(
-        `Failed to create preview: ${response.status} ${errorText}`
-      );
-    }
-
-    const apiResponse = await response.json();
-
-    // Map the API response to our PreviewResponse format
-    const previewData: PreviewResponse = {
-      url:
-        apiResponse.previewUrl ||
-        apiResponse.vercelUrl ||
-        `https://${projectId}.minidev.fun`,
-      status: apiResponse.isNewDeployment ? "deployed" : "updated",
-      port: 3000, // Default port for Next.js apps
-      previewUrl: apiResponse.previewUrl,
-      vercelUrl: apiResponse.vercelUrl,
-      aliasSuccess: apiResponse.aliasSuccess,
-      isNewDeployment: apiResponse.isNewDeployment,
-      hasPackageChanges: apiResponse.hasPackageChanges,
+    const requestBody = {
+      hash: projectId,
+      files: filesObject,
+      deployToExternal: "vercel",
     };
 
-    // Store the preview info
-    activePreviews.set(projectId, previewData);
+    console.log(`📤 Sending request to: ${PREVIEW_API_BASE}/deploy`);
+    console.log(`📤 Request body keys: ${Object.keys(requestBody)}`);
 
-    console.log(`✅ Vercel deployment created successfully: ${previewData.url}`);
-    console.log(`📊 Preview URL: ${previewData.previewUrl}`);
-    console.log(`🌐 Vercel URL: ${previewData.vercelUrl}`);
-    console.log(`📦 Package Changes: ${previewData.hasPackageChanges}`);
-    console.log(`🆕 New Deployment: ${previewData.isNewDeployment}`);
+    // Make API request to create preview with extended timeout for Vercel deployment
+    // Vercel deployments can take 5-10 minutes
+    // Note: Using keepalive and no timeout on fetch itself since we want to wait
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => {
+      console.log(`⏱️ Request timeout after 10 minutes, aborting...`);
+      controller.abort();
+    }, 600000); // 10 minute timeout
 
-    return previewData;
+    try {
+      console.log(`⏱️ Starting long-running Vercel deployment request (max 10 min)...`);
+
+      // Use native http module for better timeout control
+      const http = await import('http');
+      const https = await import('https');
+      const url = new URL(`${PREVIEW_API_BASE}/deploy`);
+
+      const options = {
+        hostname: url.hostname,
+        port: url.port || (url.protocol === 'https:' ? 443 : 80),
+        path: url.pathname,
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        timeout: 600000, // 10 minutes
+      };
+
+      const requestData = JSON.stringify(requestBody);
+
+      const response: any = await new Promise((resolve, reject) => {
+        const protocol = url.protocol === 'https:' ? https : http;
+        const req = protocol.request(options, (res) => {
+          let data = '';
+          res.on('data', (chunk) => {
+            data += chunk;
+          });
+          res.on('end', () => {
+            clearTimeout(timeoutId);
+            resolve({
+              ok: res.statusCode! >= 200 && res.statusCode! < 300,
+              status: res.statusCode,
+              statusText: res.statusMessage,
+              headers: new Map(Object.entries(res.headers)),
+              json: async () => JSON.parse(data),
+              text: async () => data,
+            });
+          });
+        });
+
+        req.on('error', (error) => {
+          clearTimeout(timeoutId);
+          reject(error);
+        });
+
+        req.on('timeout', () => {
+          clearTimeout(timeoutId);
+          req.destroy();
+          reject(new Error('Request timeout'));
+        });
+
+        req.write(requestData);
+        req.end();
+      });
+
+      console.log(`✅ Received response from deploy endpoint`);
+
+      console.log(`📥 Response status: ${response.status}`);
+      console.log(`📥 Response headers:`, Object.fromEntries(response.headers.entries()));
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error(`❌ Preview API returned error: ${response.status}`);
+        console.error(`❌ Error details: ${errorText}`);
+        throw new Error(
+          `Failed to create preview: ${response.status} ${errorText}`
+        );
+      }
+
+      const apiResponse = await response.json();
+
+      console.log("📦 API Response:", JSON.stringify(apiResponse, null, 2));
+
+      // Map the API response to our PreviewResponse format
+      const previewData: PreviewResponse = {
+        url:
+          apiResponse.previewUrl ||
+          apiResponse.vercelUrl ||
+          `http://localhost:8080/p/${projectId}`,
+        status: apiResponse.status || (apiResponse.isNewDeployment ? "deployed" : "updated"),
+        port: apiResponse.port || 3000, // Use port from response or default to 3000
+        previewUrl: apiResponse.previewUrl,
+        vercelUrl: apiResponse.vercelUrl,
+        aliasSuccess: apiResponse.aliasSuccess,
+        isNewDeployment: apiResponse.isNewDeployment,
+        hasPackageChanges: apiResponse.hasPackageChanges,
+      };
+
+      // Store the preview info
+      activePreviews.set(projectId, previewData);
+
+      console.log(`✅ Preview created successfully!`);
+      console.log(`   URL: ${previewData.url}`);
+      console.log(`   Preview URL: ${previewData.previewUrl}`);
+      console.log(`   Vercel URL: ${previewData.vercelUrl}`);
+      console.log(`   Status: ${previewData.status}`);
+      console.log(`   Port: ${previewData.port}`);
+
+      return previewData;
+    } catch (fetchError) {
+      clearTimeout(timeoutId);
+      throw fetchError;
+    }
   } catch (error) {
     console.error(`❌ Failed to create preview for ${projectId}:`, error);
+    console.error(`❌ Error stack:`, error instanceof Error ? error.stack : 'No stack trace');
     throw error;
   }
 }
@@ -111,6 +191,7 @@ export async function updatePreviewFiles(
     }));
 
     // Make API request to update preview using the /previews endpoint
+    // This will update the same deployment and handle Vercel updates automatically
     const response = await fetch(`${PREVIEW_API_BASE}/previews`, {
       method: "POST",
       headers: {
@@ -135,6 +216,17 @@ export async function updatePreviewFiles(
     const updateResponse = await response.json();
     console.log(`✅ Preview files updated successfully for ${projectId}`);
     console.log(`📊 Update Response:`, updateResponse);
+    
+    // Update the stored preview info with the Vercel URL if it was updated
+    if (updateResponse.vercelUrl) {
+      const existingPreview = activePreviews.get(projectId);
+      if (existingPreview) {
+        existingPreview.vercelUrl = updateResponse.vercelUrl;
+        existingPreview.url = updateResponse.vercelUrl;
+        activePreviews.set(projectId, existingPreview);
+        console.log(`🌐 Updated Vercel URL: ${updateResponse.vercelUrl}`);
+      }
+    }
   } catch (error) {
     console.error(`❌ Failed to update preview files for ${projectId}:`, error);
     throw error;

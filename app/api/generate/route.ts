@@ -4,7 +4,7 @@ import path from "path";
 import { v4 as uuidv4 } from "uuid";
 import { exec } from "child_process";
 import { promisify } from "util";
-import { createProject, saveProjectFiles } from "../../../lib/database";
+import { createProject, saveProjectFiles, savePatch, getProjectPatches } from "../../../lib/database";
 import { authenticateRequest } from "../../../lib/auth";
 
 const execAsync = promisify(exec);
@@ -107,9 +107,18 @@ async function callClaudeWithLogging(
   if (!apiKey) throw new Error("Claude API key not set in environment");
 
   // Select model based on stage type
-  const modelConfig = stageType
+  let modelConfig = stageType
     ? STAGE_MODEL_CONFIG[stageType]
     : STAGE_MODEL_CONFIG.LEGACY_SINGLE_STAGE;
+    
+  // Check if this is a retry with increased token limit
+  if (stageName.includes('(Retry)') && stageType === 'STAGE_3_CODE_GENERATOR') {
+    const increasedTokens = Math.min(modelConfig.maxTokens * 2, 40000);
+    modelConfig = {
+      ...modelConfig,
+      maxTokens: increasedTokens as any // Type assertion needed for union type
+    };
+  }
 
   console.log(`\n🤖 LLM Call - ${stageName}`);
   console.log("📤 Input:");
@@ -118,6 +127,11 @@ async function callClaudeWithLogging(
   console.log("  Model:", modelConfig.model);
   console.log("  Max Tokens:", modelConfig.maxTokens);
   console.log("  Reason:", modelConfig.reason);
+  
+  // Warn about large prompts that might cause rate limiting
+  if (systemPrompt.length > 50000) {
+    console.warn(`⚠️ Large system prompt (${systemPrompt.length} chars) may cause rate limiting`);
+  }
 
   const body = {
     model: modelConfig.model,
@@ -127,11 +141,17 @@ async function callClaudeWithLogging(
     messages: [{ role: "user", content: userPrompt }],
   };
 
-  // Retry logic with exponential backoff
+  // Retry logic with exponential backoff and request throttling
   const maxRetries = 3;
   const baseDelay = 1000; // 1 second
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    // Add small delay between requests to prevent rate limiting
+    if (attempt > 1) {
+      const throttleDelay = Math.min(500 * attempt, 2000); // Max 2 seconds
+      console.log(`⏱️ Throttling request (attempt ${attempt}), waiting ${throttleDelay}ms...`);
+      await new Promise(resolve => setTimeout(resolve, throttleDelay));
+    }
     try {
       const startTime = Date.now();
 
@@ -218,22 +238,34 @@ async function callClaudeWithLogging(
       const endTime = Date.now();
 
       const responseText = responseData.content[0]?.text || "";
+      
+      // Extract actual token usage from API response
+      const inputTokens = responseData.usage?.input_tokens || 0;
+      const outputTokens = responseData.usage?.output_tokens || 0;
+      const totalTokens = inputTokens + outputTokens;
+      
+      // Calculate actual cost based on real token usage
+      const actualCost = calculateActualCost(inputTokens, outputTokens, modelConfig.model);
 
       console.log("📥 Output:");
       console.log("  Response Length:", responseText.length, "chars");
       console.log("  Response Time:", endTime - startTime, "ms");
-      console.log(
-        "  Cost Estimate:",
-        estimateCost(
-          systemPrompt.length,
-          responseText.length,
-          modelConfig.model
-        )
-      );
+      console.log("  Token Usage:");
+      console.log("    Input Tokens:", inputTokens);
+      console.log("    Output Tokens:", outputTokens);
+      console.log("    Total Tokens:", totalTokens);
+      console.log("  Actual Cost:", actualCost);
       console.log(
         "  Raw Response Preview:",
-        responseText.substring(0, 300) + "..."
+        responseText.substring(0, 100) + "..."
       );
+
+      // Log token usage summary for analysis
+      console.log("📊 Token Usage Summary:");
+      console.log(`    Model: ${modelConfig.model}`);
+      console.log(`    Stage: ${stageName}`);
+      console.log(`    Input/Output Ratio: ${inputTokens > 0 ? (outputTokens / inputTokens).toFixed(2) : 'N/A'}`);
+      console.log(`    Efficiency: ${totalTokens > 0 ? ((responseText.length / totalTokens) * 4).toFixed(2) : 'N/A'} chars/token`);
 
       return responseText;
     } catch (error) {
@@ -268,36 +300,48 @@ async function callClaudeWithLogging(
   );
 }
 
-// Cost estimation helper (rough estimates based on Anthropic pricing)
-function estimateCost(
+// Cost calculation helper using actual token counts from API response
+function calculateActualCost(
   inputTokens: number,
   outputTokens: number,
   model: string
 ): string {
-  const inputCost = inputTokens / 1000; // Rough token count
-  const outputCost = outputTokens / 1000;
-
-  let costPer1kInput = 0;
-  let costPer1kOutput = 0;
+  let costPer1MInput = 0;
+  let costPer1MOutput = 0;
 
   switch (model) {
     case ANTHROPIC_MODELS.FAST:
-      costPer1kInput = 0.25; // $0.25 per 1M input tokens
-      costPer1kOutput = 1.25; // $1.25 per 1M output tokens
+      costPer1MInput = 0.25; // $0.25 per 1M input tokens
+      costPer1MOutput = 1.25; // $1.25 per 1M output tokens
       break;
     case ANTHROPIC_MODELS.BALANCED:
-      costPer1kInput = 3; // $3 per 1M input tokens
-      costPer1kOutput = 15; // $15 per 1M output tokens
+      costPer1MInput = 3; // $3 per 1M input tokens
+      costPer1MOutput = 15; // $15 per 1M output tokens
       break;
     case ANTHROPIC_MODELS.POWERFUL:
-      costPer1kInput = 15; // $15 per 1M input tokens
-      costPer1kOutput = 75; // $75 per 1M output tokens
+      costPer1MInput = 15; // $15 per 1M input tokens
+      costPer1MOutput = 75; // $75 per 1M output tokens
       break;
   }
 
-  const totalCost =
-    (inputCost * costPer1kInput + outputCost * costPer1kOutput) / 1000;
-  return `~$${totalCost.toFixed(4)}`;
+  const inputCost = (inputTokens / 1000000) * costPer1MInput;
+  const outputCost = (outputTokens / 1000000) * costPer1MOutput;
+  const totalCost = inputCost + outputCost;
+  
+  return `$${totalCost.toFixed(6)} (Input: $${inputCost.toFixed(6)}, Output: $${outputCost.toFixed(6)})`;
+}
+
+// Legacy cost estimation helper (kept for backward compatibility)
+function estimateCost(
+  inputChars: number,
+  outputChars: number,
+  model: string
+): string {
+  // Rough estimation: 1 token ≈ 4 characters
+  const estimatedInputTokens = Math.ceil(inputChars / 4);
+  const estimatedOutputTokens = Math.ceil(outputChars / 4);
+  
+  return calculateActualCost(estimatedInputTokens, estimatedOutputTokens, model);
 }
 
 function generateProjectName(intentSpec: { feature: string; reason?: string }): string {
@@ -402,15 +446,26 @@ export async function POST(request: NextRequest) {
     console.log(`📁 Boilerplate directory: ${boilerplateDir}`);
 
     // Clone boilerplate from GitHub
-    console.log("📋 Cloning boilerplate from GitHub...");
+    // Comment out GitHub clone since it's not working
+    // console.log("📋 Cloning boilerplate from GitHub...");
+    // try {
+    //   await execAsync(
+    //     `git clone https://github.com/earnkitai/minidev-boilerplate.git "${boilerplateDir}"`
+    //   );
+    //   console.log("✅ Boilerplate cloned successfully");
+    // } catch (error) {
+    //   console.error("❌ Failed to clone boilerplate:", error);
+    //   throw new Error(`Failed to clone boilerplate: ${error}`);
+    // }
+
+    // Copy from local minidev-boilerplate folder instead
+    console.log("📋 Copying from local minidev-boilerplate folder...");
     try {
-      await execAsync(
-        `git clone https://github.com/earnkitai/minidev-boilerplate.git "${boilerplateDir}"`
-      );
-      console.log("✅ Boilerplate cloned successfully");
+      await fs.copy("../minidev-boilerplate", boilerplateDir);
+      console.log("✅ Boilerplate copied successfully");
     } catch (error) {
-      console.error("❌ Failed to clone boilerplate:", error);
-      throw new Error(`Failed to clone boilerplate: ${error}`);
+      console.error("❌ Failed to copy boilerplate:", error);
+      throw new Error(`Failed to copy boilerplate: ${error}`);
     }
 
     // Copy boilerplate to user directory
@@ -546,19 +601,43 @@ export async function POST(request: NextRequest) {
 
     // Create preview with all generated files
     console.log("🚀 Creating preview with generated files...");
-    const previewData = await createPreview(
-      projectId,
-      generatedFiles,
-      accessToken
-    );
-    console.log("✅ Preview created successfully");
+    let previewData;
+    let projectUrl;
 
-    // Get the full preview URL
-    const previewUrl = getPreviewUrl(projectId);
-    console.log(`🌐 Preview URL: ${previewUrl}`);
-    console.log(
-      `📊 Preview Status: ${previewData.status}, Port: ${previewData.port}`
-    );
+    try {
+      previewData = await createPreview(
+        projectId,
+        generatedFiles,
+        accessToken
+      );
+      console.log("✅ Preview created successfully");
+
+      // Get the full preview URL
+      const previewUrl = getPreviewUrl(projectId);
+      console.log(`🌐 Preview URL: ${previewUrl}`);
+      console.log(
+        `📊 Preview Status: ${previewData.status}, Port: ${previewData.port}`
+      );
+
+      projectUrl = getPreviewUrl(projectId) || `https://${projectId}.${PREVIEW_API_BASE}`;
+      console.log(`🎉 Project ready at: ${projectUrl}`);
+    } catch (previewError) {
+      console.error("❌ Failed to create preview:", previewError);
+      console.error("❌ Preview error details:", previewError instanceof Error ? previewError.message : String(previewError));
+
+      // Create a fallback preview data object
+      previewData = {
+        url: `http://localhost:8080/p/${projectId}`,
+        status: "error",
+        port: 3000,
+        previewUrl: `http://localhost:8080/p/${projectId}`,
+      };
+
+      projectUrl = `http://localhost:8080/p/${projectId}`;
+
+      console.log("⚠️ Using fallback preview URL:", projectUrl);
+      console.log("⚠️ Continuing with project creation despite preview error");
+    }
 
     // Handle package.json changes (dependencies will be handled by preview server)
     const packageJsonChanged = generatedFiles.some(
@@ -570,10 +649,6 @@ export async function POST(request: NextRequest) {
         "📦 Package.json changed - dependencies will be handled by the preview server"
       );
     }
-
-    const projectUrl =
-      getPreviewUrl(projectId) || `https://${projectId}.${PREVIEW_API_BASE}`;
-    console.log(`🎉 Project ready at: ${projectUrl}`);
 
     // Save project to database
     try {
@@ -618,12 +693,18 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       projectId,
       url: projectUrl,
+      port: previewData.port || 3000,
       success: true,
       generatedFiles: generatedFiles.map((f) => f.filename),
       pipeline: useMultiStage ? "multi-stage" : "single-stage",
       changesApplied: pipelineResult.needsChanges,
       reason: pipelineResult.reason,
       totalFiles: generatedFiles.length,
+      previewUrl: previewData.previewUrl || projectUrl,
+      vercelUrl: previewData.vercelUrl,
+      aliasSuccess: previewData.aliasSuccess,
+      isNewDeployment: previewData.isNewDeployment,
+      hasPackageChanges: previewData.hasPackageChanges,
     });
   } catch (err) {
     console.error("❌ Error generating project:", err);
@@ -788,11 +869,33 @@ export async function PATCH(request: NextRequest) {
         // Don't fail the request if database update fails
       }
 
-      // Store diffs for rollback capability
+      // Store patch in database for rollback capability
+      let savedPatch = null;
       if (result.diffs.length > 0) {
-        // TODO: Implement diff storage
-        console.log(`📦 Storing ${result.diffs.length} diffs for rollback`);
+        try {
+          console.log(`📦 Storing patch with ${result.diffs.length} diffs for rollback`);
+
+          // Create a descriptive summary of changes
+          const changedFiles = result.diffs.map(d => d.filename);
+          const description = `Updated ${changedFiles.length} file(s): ${changedFiles.join(', ')}`;
+
+          // Save patch data
+          savedPatch = await savePatch(projectId, {
+            prompt,
+            diffs: result.diffs,
+            changedFiles,
+            timestamp: new Date().toISOString(),
+          }, description);
+
+          console.log(`✅ Patch saved with ID: ${savedPatch.id}`);
+        } catch (patchError) {
+          console.error("⚠️ Failed to save patch to database:", patchError);
+          // Don't fail the request if patch save fails
+        }
       }
+
+      // Get the updated preview URL (should be Vercel URL now)
+      const updatedPreviewUrl = getPreviewUrl(projectId);
 
       return NextResponse.json({
         success: true,
@@ -800,8 +903,11 @@ export async function PATCH(request: NextRequest) {
         files: result.files,
         diffs: result.diffs,
         changed: result.files.map(f => f.filename), // Add changedFiles for frontend compatibility
-        previewUrl: `http://localhost:8080/p/${projectId}`,
-        message: "Project updated with diff-based changes"
+        previewUrl: updatedPreviewUrl || `http://localhost:8080/p/${projectId}`,
+        vercelUrl: updatedPreviewUrl, // Include Vercel URL
+        message: "Project updated with diff-based changes",
+        patchId: savedPatch?.id, // Include patch ID for tracking
+        patchDescription: savedPatch?.description,
       });
     } else {
       // Handle non-streaming response with enhanced pipeline
@@ -886,10 +992,15 @@ export async function PATCH(request: NextRequest) {
         );
       }
 
+      // Get the updated preview URL (should be Vercel URL now)
+      const updatedPreviewUrl = getPreviewUrl(projectId);
+      
       // Return summary
       return NextResponse.json({
         success: true,
         changed: generatedFiles.map((f) => f.filename),
+        previewUrl: updatedPreviewUrl || `http://localhost:8080/p/${projectId}`,
+        vercelUrl: updatedPreviewUrl, // Include Vercel URL
       });
     }
   } catch (err) {
