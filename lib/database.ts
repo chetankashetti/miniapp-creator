@@ -21,7 +21,7 @@ export async function getUserByPrivyId(privyUserId: string) {
       setTimeout(() => reject(new Error('Database query timeout')), 10000)
     );
     
-    const [user] = await Promise.race([queryPromise, timeoutPromise]) as any;
+    const [user] = await Promise.race([queryPromise, timeoutPromise]) as typeof users.$inferSelect[];
     return user;
   } catch (error) {
     console.error('❌ getUserByPrivyId error:', error);
@@ -122,7 +122,7 @@ export async function updateProjectFile(projectId: string, filename: string, con
 // Patch management
 export async function savePatch(
   projectId: string,
-  patchData: any,
+  patchData: Record<string, unknown>,
   description?: string
 ) {
   const [patch] = await db.insert(projectPatches).values({

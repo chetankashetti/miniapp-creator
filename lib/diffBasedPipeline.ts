@@ -2,14 +2,14 @@
 // This module provides a specialized pipeline for follow-up changes using surgical diffs
 // It uses the multi-stage pipeline with diff-based prompts for optimal results
 
-import { 
+import {
   STAGE_MODEL_CONFIG,
   PatchPlan,
   FileDiff,
   getStage0ContextGathererPrompt,
   executeMultiStagePipeline
 } from './llmOptimizer';
-import { applyDiffToContent, applyDiffHunks, validateDiff } from './diffUtils';
+import { applyDiffHunks, validateDiff } from './diffUtils';
 import { executeToolCalls } from './toolExecutionService';
 
 export interface DiffBasedResult {
@@ -139,6 +139,8 @@ export async function executeDiffBasedPipeline(
     }
   }
 
+  // Note: Syntax validation removed due to false positives with TypeScript generics
+  // Files will be validated by TypeScript compiler during build/preview
   console.log('✅ Diff-Based Pipeline Complete');
   console.log(`Generated ${generatedFiles.length} files with ${diffs.length} diffs`);
 
@@ -160,19 +162,25 @@ export function applyDiffsToFiles(
   console.log('applyDiffsToFiles called with:', { files: files.length, diffs: diffs.length });
   const result: { filename: string; content: string }[] = [];
   const modifiedFiles = new Set<string>();
+  const currentContent: { [filename: string]: string } = {};
+
+  // Initialize current content with original files
+  for (const file of files) {
+    currentContent[file.filename] = file.content;
+  }
 
   for (const diff of diffs) {
     console.log('Processing diff for:', diff.filename);
-    const originalFile = files.find(f => f.filename === diff.filename);
     
-    if (originalFile) {
-      // File exists - apply diff
+    if (currentContent[diff.filename] !== undefined) {
+      // File exists - apply diff to current content
       try {
         console.log('Applying diff hunks:', diff.hunks);
-        const newContent = applyDiffHunks(originalFile.content, diff.hunks);
+        const newContent = applyDiffHunks(currentContent[diff.filename], diff.hunks);
         
-        // Only add to result if content actually changed
-        if (newContent !== originalFile.content) {
+        // Only add to result if content actually changed from original
+        const originalContent = files.find(f => f.filename === diff.filename)?.content || '';
+        if (newContent !== originalContent) {
           result.push({
             filename: diff.filename,
             content: newContent
@@ -182,10 +190,16 @@ export function applyDiffsToFiles(
         } else {
           console.log(`⚠️ No changes detected for ${diff.filename}, skipping`);
         }
+        
+        // Update current content for this file
+        currentContent[diff.filename] = newContent;
       } catch (error) {
         console.error(`❌ Failed to apply diff to ${diff.filename}:`, error);
-        // Add original file as fallback
-        result.push(originalFile);
+        // Add current content as fallback
+        result.push({
+          filename: diff.filename,
+          content: currentContent[diff.filename]
+        });
         modifiedFiles.add(diff.filename);
       }
     } else {
@@ -199,20 +213,24 @@ export function applyDiffsToFiles(
           .map(line => line.substring(1))
           .join('\n');
         
+        const newContent = contentLines;
         result.push({
           filename: diff.filename,
-          content: contentLines
+          content: newContent
         });
         modifiedFiles.add(diff.filename);
+        currentContent[diff.filename] = newContent;
         console.log(`✅ Created new file ${diff.filename} with ${contentLines.length} chars`);
       } catch (error) {
         console.error(`❌ Failed to create file ${diff.filename}:`, error);
         // Add empty file as fallback
+        const fallbackContent = '';
         result.push({
           filename: diff.filename,
-          content: ''
+          content: fallbackContent
         });
         modifiedFiles.add(diff.filename);
+        currentContent[diff.filename] = fallbackContent;
       }
     }
   }

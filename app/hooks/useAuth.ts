@@ -139,7 +139,7 @@ export function useAuth() {
     };
 
     initializeAuth();
-  }, [ready, authenticated, privyUser?.id, getAccessToken, privyUser]);
+  }, [ready, authenticated, privyUser?.id, getAccessToken, privyUser, authState.isAuthenticated, authState.sessionToken, authState.user?.privyUserId, logout, router]);
 
   return {
     ...authState,

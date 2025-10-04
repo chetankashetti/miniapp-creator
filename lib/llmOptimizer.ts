@@ -21,7 +21,7 @@ const createDebugLogDir = (projectId: string): string => {
   return debugDir;
 };
 
-const logStageResponse = (projectId: string, stageName: string, response: string, metadata?: any): void => {
+const logStageResponse = (projectId: string, stageName: string, response: string, metadata?: Record<string, unknown>): void => {
   try {
     const debugDir = createDebugLogDir(projectId);
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
@@ -641,14 +641,28 @@ ${currentFiles.map((f) => `---${f.filename}---\n${f.content}`).join("\n\n")}
 
 TASK: Plan detailed file changes to implement the intent and generate unified diff hunks for surgical changes
 
-DIFF GENERATION REQUIREMENTS:
-- For each file modification, generate unified diff hunks in the format: @@ -oldStart,oldLines +newStart,newLines @@
-- Include context lines (unchanged lines) around changes for better accuracy
-- Use + prefix for added lines, - prefix for removed lines, space for context lines
+DIFF GENERATION REQUIREMENTS - CRITICAL:
+- For each file modification, generate unified diff hunks in VALID format: @@ -oldStart,oldLines +newStart,newLines @@
+- oldLines and newLines MUST be the ACTUAL count of lines in that section (NEVER use 0)
+- Include 2-3 context lines (unchanged lines with space prefix) around changes for better accuracy
+- Use + prefix for added lines, - prefix for removed lines, space prefix for context lines
 - Generate minimal, surgical diffs rather than full file rewrites
 - Focus on precise line-by-line changes to preserve existing code structure
 - CRITICAL: Always preserve the 'use client'; directive at the very top of React component files
 - When adding imports, place them AFTER the 'use client'; directive but BEFORE other imports
+
+UNIFIED DIFF FORMAT VALIDATION:
+✅ CORRECT: @@ -5,3 +5,5 @@  (means: old section starts at line 5 with 3 lines, new section starts at line 5 with 5 lines)
+✅ CORRECT: @@ -10,7 +10,12 @@ (old: 7 lines starting at 10, new: 12 lines starting at 10)
+❌ WRONG: @@ -2,0 +3,1 @@     (NEVER use 0 for oldLines - must be actual count)
+❌ WRONG: @@ -5 +5,2 @@        (missing line counts - must include both)
+
+LINE COUNTING RULES:
+- Count ALL lines in the hunk including context lines, removed lines, and added lines
+- oldLines = number of context lines + number of removed lines (lines with - prefix)
+- newLines = number of context lines + number of added lines (lines with + prefix)
+- If adding 2 new lines with 3 context lines: oldLines=3, newLines=5
+- If removing 1 line with 2 context lines: oldLines=3, newLines=2
 
 BOILERPLATE CONTEXT:
 ${JSON.stringify(FARCASTER_BOILERPLATE_CONTEXT, null, 2)}
@@ -853,12 +867,17 @@ SOLIDITY DOCUMENTATION (CRITICAL):
 
 ESLINT COMPLIANCE (CRITICAL - BUILD WILL FAIL IF VIOLATED):
 - Remove unused variables from destructuring: const { used, unused } = hook() → const { used } = hook()
-- Remove unused imports: import { used, unused } from 'module' → import { used } from 'module'
+- IMPORT HANDLING: Only remove imports that are TRULY unused - check if imported items are used anywhere in the file
+- IMPORT VALIDATION: Before removing any import, verify it's not used in: function calls, destructuring, JSX components, or hook calls
+- Remove unused imports ONLY if imported items are not used anywhere: import { used, unused } from 'module' → import { used } from 'module'
 - Include all dependencies in useEffect: useEffect(() => { fn(); }, [fn])
 - Use useCallback for functions in useEffect deps: const fn = useCallback(() => {}, [deps])
 - Include ALL dependencies in useCallback hooks: useCallback(() => { doSomething(dep1, dep2); }, [dep1, dep2])
 - Never declare variables that aren't used in the component
 - Never import modules that aren't used in the component
+- CRITICAL: Always include imports for hooks that are called: if you use useTodos(), you MUST import useTodos
+- CRITICAL: Always include imports for components that are rendered: if you use <TodoList />, you MUST import TodoList
+- CRITICAL: Always include imports for functions that are called: if you call clearAll(), you MUST import the hook that provides it
 - Always use all imported modules and declared variables
 - NEVER call React hooks inside callbacks, loops, or conditions: use hooks only at the top level of components
 - Use for loops instead of Array.from() when calling hooks: for (let i = 0; i < count; i++) { useHook() }
@@ -866,6 +885,7 @@ ESLINT COMPLIANCE (CRITICAL - BUILD WILL FAIL IF VIOLATED):
 - Escape JSX entities: use &apos; for apostrophes, &quot; for quotes, &amp; for ampersands
 - NEVER use 'let' for variables that are never reassigned - ALWAYS use 'const' (prefer-const rule)
 - React Hook dependencies: Include ALL values from component scope (props, state, context) that are used inside the callback
+- NEVER use empty interfaces: export interface Props extends BaseProps {} → export type Props = BaseProps;
 BLOCKCHAIN: Use pre-vetted templates (ERC20Template.sol, ERC721Template.sol, EscrowTemplate.sol), modify contracts/scripts/deploy.js, include ABI placeholders
 - Return valid JSON array only - NO EXPLANATIONS, NO TEXT, ONLY JSON
 
@@ -997,12 +1017,17 @@ SOLIDITY DOCUMENTATION (CRITICAL):
 
 ESLINT COMPLIANCE (CRITICAL - BUILD WILL FAIL IF VIOLATED):
 - Remove unused variables from destructuring: const { used, unused } = hook() → const { used } = hook()
-- Remove unused imports: import { used, unused } from 'module' → import { used } from 'module'
+- IMPORT HANDLING: Only remove imports that are TRULY unused - check if imported items are used anywhere in the file
+- IMPORT VALIDATION: Before removing any import, verify it's not used in: function calls, destructuring, JSX components, or hook calls
+- Remove unused imports ONLY if imported items are not used anywhere: import { used, unused } from 'module' → import { used } from 'module'
 - Include all dependencies in useEffect: useEffect(() => { fn(); }, [fn])
 - Use useCallback for functions in useEffect deps: const fn = useCallback(() => {}, [deps])
 - Include ALL dependencies in useCallback hooks: useCallback(() => { doSomething(dep1, dep2); }, [dep1, dep2])
 - Never declare variables that aren't used in the component
 - Never import modules that aren't used in the component
+- CRITICAL: Always include imports for hooks that are called: if you use useTodos(), you MUST import useTodos
+- CRITICAL: Always include imports for components that are rendered: if you use <TodoList />, you MUST import TodoList
+- CRITICAL: Always include imports for functions that are called: if you call clearAll(), you MUST import the hook that provides it
 - Always use all imported modules and declared variables
 - NEVER call React hooks inside callbacks, loops, or conditions: use hooks only at the top level of components
 - Use for loops instead of Array.from() when calling hooks: for (let i = 0; i < count; i++) { useHook() }
@@ -1010,6 +1035,7 @@ ESLINT COMPLIANCE (CRITICAL - BUILD WILL FAIL IF VIOLATED):
 - Escape JSX entities: use &apos; for apostrophes, &quot; for quotes, &amp; for ampersands
 - NEVER use 'let' for variables that are never reassigned - ALWAYS use 'const' (prefer-const rule)
 - React Hook dependencies: Include ALL values from component scope (props, state, context) that are used inside the callback
+- NEVER use empty interfaces: export interface Props extends BaseProps {} → export type Props = BaseProps;
 BLOCKCHAIN: Use pre-vetted templates (ERC20Template.sol, ERC721Template.sol, EscrowTemplate.sol), modify contracts/scripts/deploy.js, include ABI placeholders
 - Return valid JSON array only - NO EXPLANATIONS, NO TEXT, ONLY JSON
 
@@ -1663,10 +1689,7 @@ export async function executeMultiStagePipeline(
     console.log("Response Time:", endTime2 - startTime2, "ms");
     console.log("Raw Response:", patchResponse.substring(0, 500) + "...");
 
-    let patchPlan: PatchPlan;
-    
-    // Use the extracted parser utility
-    patchPlan = parseStage2PatchResponse(patchResponse);
+    const patchPlan: PatchPlan = parseStage2PatchResponse(patchResponse);
 
     // Check for potential truncation by looking for incomplete JSON
     const isPotentiallyTruncated = isResponseTruncated(patchResponse);
@@ -1927,7 +1950,7 @@ export async function executeMultiStagePipeline(
     let totalContentLength = 0;
     let totalDiffLength = 0;
 
-    generatedFiles.forEach((file, index) => {
+    generatedFiles.forEach((file) => {
       totalFiles++;
       
       if (file.operation === 'create') createFilesStage3++;
@@ -2122,6 +2145,7 @@ export async function executeMultiStagePipeline(
         const isMissingFile = validation.missingFiles.some((f) =>
           f.includes(file.filename)
         );
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
         const isMissingClientDirective =
           clientDirectiveValidation.missingClientDirective.some(
             (m) => m.file === file.filename
@@ -2146,6 +2170,7 @@ export async function executeMultiStagePipeline(
         const isMissingFile = validation.missingFiles.some((f) =>
           f.includes(file.filename)
         );
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
         const isMissingClientDirective =
           clientDirectiveValidation.missingClientDirective.some(
             (m) => m.file === file.filename
@@ -2378,9 +2403,11 @@ export async function executeMultiStagePipeline(
           }
           
           // Check if diff is too large (potential full rewrite)
-          const totalChanges = hunks.reduce((sum, hunk) => sum + hunk.oldLines + hunk.newLines, 0);
-          if (originalFile && totalChanges > originalFile.content.split('\n').length * 0.8) {
-            console.warn(`⚠️ Diff for ${file.filename} is too large (${totalChanges} changes), might be a full rewrite - skipping`);
+          // Calculate the maximum of oldLines vs newLines per hunk to avoid double counting
+          const totalChanges = hunks.reduce((sum, hunk) => sum + Math.max(hunk.oldLines, hunk.newLines), 0);
+          const fileLineCount = originalFile ? originalFile.content.split('\n').length : 0;
+          if (originalFile && totalChanges > fileLineCount * 0.9) {
+            console.warn(`⚠️ Diff for ${file.filename} is too large (${totalChanges} changes vs ${fileLineCount} lines, ${Math.round(totalChanges/fileLineCount*100)}%), might be a full rewrite - skipping`);
             return null; // Skip this diff
           }
           

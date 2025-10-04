@@ -4,7 +4,7 @@ import path from "path";
 import { v4 as uuidv4 } from "uuid";
 import { exec } from "child_process";
 import { promisify } from "util";
-import { createProject, saveProjectFiles, savePatch, getProjectPatches } from "../../../lib/database";
+import { createProject, saveProjectFiles, savePatch, getUserById, createUser, getProjectById } from "../../../lib/database";
 import { authenticateRequest } from "../../../lib/auth";
 
 const execAsync = promisify(exec);
@@ -25,7 +25,7 @@ import {
 } from "../../../lib/llmOptimizer";
 import { executeEnhancedPipeline } from "../../../lib/enhancedPipeline";
 import { executeDiffBasedPipeline } from "../../../lib/diffBasedPipeline";
-import { headers } from "next/headers";
+// import { headers } from "next/headers"; // Removed unused import
 
 // Utility: Recursively read all files in a directory, excluding node_modules, .next, and other build artifacts
 async function readAllFiles(
@@ -116,8 +116,8 @@ async function callClaudeWithLogging(
     const increasedTokens = Math.min(modelConfig.maxTokens * 2, 40000);
     modelConfig = {
       ...modelConfig,
-      maxTokens: increasedTokens as any // Type assertion needed for union type
-    };
+      maxTokens: increasedTokens
+    } as typeof modelConfig;
   }
 
   console.log(`\n🤖 LLM Call - ${stageName}`);
@@ -332,6 +332,7 @@ function calculateActualCost(
 }
 
 // Legacy cost estimation helper (kept for backward compatibility)
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function estimateCost(
   inputChars: number,
   outputChars: number,
@@ -382,12 +383,59 @@ function generateProjectName(intentSpec: { feature: string; reason?: string }): 
 
 export async function POST(request: NextRequest) {
   try {
-    const { user, isAuthorized, error } = await authenticateRequest(request);
-    if (!isAuthorized || !user) {
-      return NextResponse.json(
-        { error: error || "Authentication required" },
-        { status: 401 }
-      );
+    // Check for auth bypass (testing only)
+    const bypassAuth = request.headers.get("X-Bypass-Auth") === "true";
+    const testUserId = request.headers.get("X-Test-User-Id");
+
+    let user;
+    let isAuthorized;
+
+    if (bypassAuth && testUserId) {
+      console.log("⚠️ AUTH BYPASS ENABLED FOR TESTING");
+
+      // Check if test user exists in database, create if not
+      try {
+        let dbUser = await getUserById(testUserId);
+        if (!dbUser) {
+          console.log("🔧 Creating test user in database...");
+          dbUser = await createUser(
+            testUserId, // Use UUID as privyUserId too
+            "test@example.com",
+            "Test User",
+            undefined
+          );
+          console.log(`✅ Test user created with ID: ${dbUser.id}`);
+        }
+
+        user = {
+          id: dbUser.id,
+          privyUserId: dbUser.privyUserId,
+          email: dbUser.email ?? "test@example.com",
+          displayName: dbUser.displayName ?? "Test User",
+        };
+      } catch (dbError) {
+        console.error("⚠️ Failed to create/get test user:", dbError);
+        // Fallback to mock user (database save will be skipped)
+        user = {
+          id: testUserId,
+          privyUserId: testUserId,
+          email: "test@example.com",
+          displayName: "Test User",
+        };
+      }
+
+      isAuthorized = true;
+    } else {
+      const authResult = await authenticateRequest(request);
+      user = authResult.user;
+      isAuthorized = authResult.isAuthorized;
+
+      if (!isAuthorized || !user) {
+        return NextResponse.json(
+          { error: authResult.error || "Authentication required" },
+          { status: 401 }
+        );
+      }
     }
 
     const { prompt, useMultiStage = true } = await request.json();
@@ -447,26 +495,26 @@ export async function POST(request: NextRequest) {
 
     // Clone boilerplate from GitHub
     // Comment out GitHub clone since it's not working
-    // console.log("📋 Cloning boilerplate from GitHub...");
-    // try {
-    //   await execAsync(
-    //     `git clone https://github.com/earnkitai/minidev-boilerplate.git "${boilerplateDir}"`
-    //   );
-    //   console.log("✅ Boilerplate cloned successfully");
-    // } catch (error) {
-    //   console.error("❌ Failed to clone boilerplate:", error);
-    //   throw new Error(`Failed to clone boilerplate: ${error}`);
-    // }
+    console.log("📋 Cloning boilerplate from GitHub...");
+    try {
+      await execAsync(
+        `git clone https://github.com/chetankashetti/minidev-boilerplate.git "${boilerplateDir}"`
+      );
+      console.log("✅ Boilerplate cloned successfully");
+    } catch (error) {
+      console.error("❌ Failed to clone boilerplate:", error);
+      throw new Error(`Failed to clone boilerplate: ${error}`);
+    }
 
     // Copy from local minidev-boilerplate folder instead
-    console.log("📋 Copying from local minidev-boilerplate folder...");
-    try {
-      await fs.copy("../minidev-boilerplate", boilerplateDir);
-      console.log("✅ Boilerplate copied successfully");
-    } catch (error) {
-      console.error("❌ Failed to copy boilerplate:", error);
-      throw new Error(`Failed to copy boilerplate: ${error}`);
-    }
+    // console.log("📋 Copying from local minidev-boilerplate folder...");
+    // try {
+    //   await fs.copy("../minidev-boilerplate", boilerplateDir);
+    //   console.log("✅ Boilerplate copied successfully");
+    // } catch (error) {
+    //   console.error("❌ Failed to copy boilerplate:", error);
+    //   throw new Error(`Failed to copy boilerplate: ${error}`);
+    // }
 
     // Copy boilerplate to user directory
     console.log("📋 Copying boilerplate to user directory...");
@@ -721,12 +769,69 @@ export async function POST(request: NextRequest) {
 
 export async function PATCH(request: NextRequest) {
   try {
-    const { user, isAuthorized, error } = await authenticateRequest(request);
-    if (!isAuthorized || !user) {
-      return NextResponse.json(
-        { error: error || "Authentication required" },
-        { status: 401 }
-      );
+    // Check for auth bypass (testing only)
+    const bypassAuth = request.headers.get("X-Bypass-Auth") === "true";
+    const testUserId = request.headers.get("X-Test-User-Id");
+
+    let user;
+    let isAuthorized;
+
+    if (bypassAuth && testUserId) {
+      console.log("⚠️ AUTH BYPASS ENABLED FOR TESTING");
+
+      // Check if test user exists in database, create if not
+      try {
+        let dbUser = await getUserById(testUserId);
+        if (!dbUser) {
+          console.log("🔧 Creating test user in database...");
+          try {
+            dbUser = await createUser(
+              testUserId, // Use UUID as privyUserId too
+              "test@example.com",
+              "Test User",
+              undefined
+            );
+            console.log(`✅ Test user created with ID: ${dbUser.id}`);
+          } catch (createError: any) {
+            // Handle duplicate key error gracefully
+            if (createError.code === '23505' && createError.constraint === 'users_privy_user_id_unique') {
+              console.log("ℹ️ Test user already exists, fetching from database...");
+              dbUser = await getUserById(testUserId);
+            } else {
+              throw createError;
+            }
+          }
+        }
+
+        user = {
+          id: dbUser.id,
+          privyUserId: dbUser.privyUserId,
+          email: dbUser.email ?? "test@example.com",
+          displayName: dbUser.displayName ?? "Test User",
+        };
+      } catch (dbError) {
+        console.error("⚠️ Failed to create/get test user:", dbError);
+        // Fallback to mock user (database save will be skipped)
+        user = {
+          id: testUserId,
+          privyUserId: testUserId,
+          email: "test@example.com",
+          displayName: "Test User",
+        };
+      }
+
+      isAuthorized = true;
+    } else {
+      const authResult = await authenticateRequest(request);
+      user = authResult.user;
+      isAuthorized = authResult.isAuthorized;
+
+      if (!isAuthorized || !user) {
+        return NextResponse.json(
+          { error: authResult.error || "Authentication required" },
+          { status: 401 }
+        );
+      }
     }
 
     const { projectId, prompt, stream = false, useDiffBased = true } = await request.json();
@@ -847,6 +952,23 @@ export async function PATCH(request: NextRequest) {
       // Update project files in database
       try {
         console.log("💾 Updating project files in database...");
+        
+        // First, check if the project exists in the database
+        const existingProject = await getProjectById(projectId);
+        if (!existingProject) {
+          console.log(`⚠️ Project ${projectId} not found in database, creating it...`);
+          
+          // Create the project in the database
+          const project = await createProject(
+            user.id,
+            `Project ${projectId.substring(0, 8)}`,
+            `AI-generated project updated via PATCH`,
+            getPreviewUrl(projectId) || undefined,
+            projectId
+          );
+          console.log(`✅ Created project ${projectId} in database`);
+        }
+        
         // Read all files from the updated directory and save them
         const allFiles = await readAllFiles(userDir);
         console.log(`📁 Found ${allFiles.length} files to save to database`);

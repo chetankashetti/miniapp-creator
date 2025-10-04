@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 
 interface Patch {
   id: string;
@@ -11,7 +11,7 @@ interface Patch {
       filename: string;
       oldContent: string;
       newContent: string;
-      hunks: any[];
+      hunks: unknown[];
     }>;
     changedFiles: string[];
     timestamp: string;
@@ -33,13 +33,7 @@ export function PatchHistory({ projectId, onPatchSelect }: PatchHistoryProps) {
   const [selectedPatchId, setSelectedPatchId] = useState<string | null>(null);
   const [expandedPatchId, setExpandedPatchId] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (projectId) {
-      fetchPatches();
-    }
-  }, [projectId]);
-
-  const fetchPatches = async () => {
+  const fetchPatches = useCallback(async () => {
     try {
       setLoading(true);
       setError(null);
@@ -58,7 +52,13 @@ export function PatchHistory({ projectId, onPatchSelect }: PatchHistoryProps) {
     } finally {
       setLoading(false);
     }
-  };
+  }, [projectId]);
+
+  useEffect(() => {
+    if (projectId) {
+      fetchPatches();
+    }
+  }, [projectId, fetchPatches]);
 
   const handleRevertPatch = async (patchId: string) => {
     try {

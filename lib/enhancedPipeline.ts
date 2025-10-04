@@ -131,6 +131,8 @@ export async function executeEnhancedPipeline(
       });
     }
 
+    // Note: Syntax validation removed due to false positives with TypeScript generics
+    // Files will be validated by TypeScript compiler during build/preview
     console.log("✅ Enhanced pipeline completed successfully");
     console.log(`📁 Generated ${filesWithDiffs.length} files`);
     console.log(`🔧 Context data: ${contextData ? 'Yes' : 'No'}`);

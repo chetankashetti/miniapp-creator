@@ -1,4 +1,5 @@
 // Robust JSON parsing utilities for multi-stage LLM pipeline responses
+import { PatchPlan, DiffHunk } from './llmOptimizer';
 
 /**
  * Helper function to find balanced JSON from a starting index
@@ -8,7 +9,7 @@ function findBalancedFromIndex(text: string, startIdx: number): string | null {
   const matching = opening === '{' ? '}' : opening === '[' ? ']' : null;
   if (!matching) return null;
 
-  let stack = [opening];
+  const stack = [opening];
   let inString = false;
   let stringChar: string | null = null;
   let escape = false;
@@ -134,10 +135,10 @@ function removeTrailingCommas(jsonLike: string): string {
 /**
  * Try to parse JSON with sanitization
  */
-function tryParseJsonText(raw: string): any {
+function tryParseJsonText(raw: string): unknown {
   try {
     return JSON.parse(raw);
-  } catch (e) {
+  } catch {
     // try sanitization
     try {
       let s = escapeControlCharsInsideStrings(raw);
@@ -172,7 +173,7 @@ function extractPatchesArrayAsObject(text: string): string | null {
 /**
  * Parse Stage 2 Patch Planner response with robust JSON parsing
  */
-export function parseStage2PatchResponse(responseText: string): any {
+export function parseStage2PatchResponse(responseText: string): PatchPlan {
   // 1) Quick exact JSON extraction between markers if present
   const startMarker = '__START_JSON__';
   const endMarker = '__END_JSON__';
@@ -181,7 +182,7 @@ export function parseStage2PatchResponse(responseText: string): any {
   if (startMarkIdx !== -1 && endMarkIdx !== -1) {
     const candidate = responseText.slice(startMarkIdx + startMarker.length, endMarkIdx).trim();
     try {
-      return tryParseJsonText(candidate);
+      return tryParseJsonText(candidate) as PatchPlan;
     } catch (e) {
       console.warn('Parsing between markers failed:', e);
     }
@@ -191,7 +192,7 @@ export function parseStage2PatchResponse(responseText: string): any {
   const balanced = findFirstBalancedJson(responseText);
   if (balanced) {
     try {
-      return tryParseJsonText(balanced);
+      return tryParseJsonText(balanced) as PatchPlan;
     } catch (e) {
       console.warn('Parsing balanced JSON failed, attempting sanitization...', e);
     }
@@ -201,7 +202,7 @@ export function parseStage2PatchResponse(responseText: string): any {
   const patchesObjText = extractPatchesArrayAsObject(responseText);
   if (patchesObjText) {
     try {
-      return tryParseJsonText(patchesObjText);
+      return tryParseJsonText(patchesObjText) as PatchPlan;
     } catch (e) {
       console.warn('Parsing extracted patches object failed:', e);
     }
@@ -235,7 +236,7 @@ export function parseStage2PatchResponse(responseText: string): any {
 /**
  * Parse Stage 3 Code Generator response with robust JSON parsing
  */
-export function parseStage3CodeResponse(responseText: string): any[] {
+export function parseStage3CodeResponse(responseText: string): { filename: string; content?: string; unifiedDiff?: string; operation?: string; diffHunks?: DiffHunk[] }[] {
   // 1) Quick exact JSON extraction between markers if present
   const startMarker = '__START_JSON__';
   const endMarker = '__END_JSON__';
@@ -244,7 +245,7 @@ export function parseStage3CodeResponse(responseText: string): any[] {
   if (startMarkIdx !== -1 && endMarkIdx !== -1) {
     const candidate = responseText.slice(startMarkIdx + startMarker.length, endMarkIdx).trim();
     try {
-      return tryParseJsonText(candidate);
+      return tryParseJsonText(candidate) as { filename: string; content?: string; unifiedDiff?: string; operation?: string; diffHunks?: DiffHunk[] }[];
     } catch (e) {
       console.warn('Stage 3: Parsing between markers failed, attempting repairs:', e);
       
@@ -252,7 +253,7 @@ export function parseStage3CodeResponse(responseText: string): any[] {
       const repaired = repairJsonArray(candidate);
       if (repaired) {
         try {
-          return tryParseJsonText(repaired);
+          return tryParseJsonText(repaired) as { filename: string; content?: string; unifiedDiff?: string; operation?: string; diffHunks?: DiffHunk[] }[];
         } catch (repairError) {
           console.warn('Stage 3: JSON repair also failed:', repairError);
         }
@@ -264,7 +265,7 @@ export function parseStage3CodeResponse(responseText: string): any[] {
   const balanced = findFirstBalancedJson(responseText);
   if (balanced) {
     try {
-      return tryParseJsonText(balanced);
+      return tryParseJsonText(balanced) as { filename: string; content?: string; unifiedDiff?: string; operation?: string; diffHunks?: DiffHunk[] }[];
     } catch (e) {
       console.warn('Stage 3: Parsing balanced JSON failed:', e);
     }
@@ -272,8 +273,8 @@ export function parseStage3CodeResponse(responseText: string): any[] {
 
   // 3) Fallback: try direct parsing
   try {
-    return JSON.parse(responseText);
-  } catch (e) {
+    return JSON.parse(responseText) as { filename: string; content?: string; unifiedDiff?: string; operation?: string; diffHunks?: DiffHunk[] }[];
+  } catch {
     throw new Error('Stage 3: All JSON parsing strategies failed');
   }
 }
@@ -330,7 +331,7 @@ function repairJsonArray(jsonText: string): string | null {
     // Try parsing the repaired JSON
     JSON.parse(repaired);
     return repaired;
-  } catch (e) {
+  } catch {
     return null;
   }
 }
@@ -338,7 +339,7 @@ function repairJsonArray(jsonText: string): string | null {
 /**
  * Parse Stage 4 Validator response with robust JSON parsing
  */
-export function parseStage4ValidatorResponse(responseText: string): any[] {
+export function parseStage4ValidatorResponse(responseText: string): { filename: string; content: string; unifiedDiff?: string; diffHunks?: DiffHunk[] }[] {
   // 1) Quick exact JSON extraction between markers if present
   const startMarker = '__START_JSON__';
   const endMarker = '__END_JSON__';
@@ -347,7 +348,7 @@ export function parseStage4ValidatorResponse(responseText: string): any[] {
   if (startMarkIdx !== -1 && endMarkIdx !== -1) {
     const candidate = responseText.slice(startMarkIdx + startMarker.length, endMarkIdx).trim();
     try {
-      return tryParseJsonText(candidate);
+      return tryParseJsonText(candidate) as { filename: string; content: string; unifiedDiff?: string; diffHunks?: DiffHunk[] }[];
     } catch (e) {
       console.warn('Stage 4: Parsing between markers failed:', e);
     }
@@ -357,7 +358,7 @@ export function parseStage4ValidatorResponse(responseText: string): any[] {
   const balanced = findFirstBalancedJson(responseText);
   if (balanced) {
     try {
-      return tryParseJsonText(balanced);
+      return tryParseJsonText(balanced) as { filename: string; content: string; unifiedDiff?: string; diffHunks?: DiffHunk[] }[];
     } catch (e) {
       console.warn('Stage 4: Parsing balanced JSON failed:', e);
     }
@@ -365,8 +366,8 @@ export function parseStage4ValidatorResponse(responseText: string): any[] {
 
   // 3) Fallback: try direct parsing
   try {
-    return JSON.parse(responseText);
-  } catch (e) {
+    return JSON.parse(responseText) as { filename: string; content: string; unifiedDiff?: string; diffHunks?: DiffHunk[] }[];
+  } catch {
     throw new Error('Stage 4: All JSON parsing strategies failed');
   }
 }
@@ -374,7 +375,7 @@ export function parseStage4ValidatorResponse(responseText: string): any[] {
 /**
  * Generic JSON parser that can be used for any stage
  */
-export function parseJsonResponse(responseText: string, stageName: string = 'Unknown'): any {
+export function parseJsonResponse(responseText: string, stageName: string = 'Unknown'): unknown {
   // 1) Quick exact JSON extraction between markers if present
   const startMarker = '__START_JSON__';
   const endMarker = '__END_JSON__';
@@ -402,7 +403,7 @@ export function parseJsonResponse(responseText: string, stageName: string = 'Unk
   // 3) Fallback: try direct parsing
   try {
     return JSON.parse(responseText);
-  } catch (e) {
+  } catch {
     throw new Error(`${stageName}: All JSON parsing strategies failed`);
   }
 }

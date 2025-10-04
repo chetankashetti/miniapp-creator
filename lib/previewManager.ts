@@ -83,7 +83,7 @@ export async function createPreview(
 
       const requestData = JSON.stringify(requestBody);
 
-      const response: any = await new Promise((resolve, reject) => {
+      const response: { success: boolean; error?: string; previewUrl?: string; vercelUrl?: string; [key: string]: unknown } = await new Promise((resolve, reject) => {
         const protocol = url.protocol === 'https:' ? https : http;
         const req = protocol.request(options, (res) => {
           let data = '';
@@ -92,14 +92,23 @@ export async function createPreview(
           });
           res.on('end', () => {
             clearTimeout(timeoutId);
-            resolve({
-              ok: res.statusCode! >= 200 && res.statusCode! < 300,
-              status: res.statusCode,
-              statusText: res.statusMessage,
-              headers: new Map(Object.entries(res.headers)),
-              json: async () => JSON.parse(data),
-              text: async () => data,
-            });
+            const success = res.statusCode! >= 200 && res.statusCode! < 300;
+            try {
+              const responseData = JSON.parse(data);
+              resolve({
+                success,
+                ...responseData,
+                status: res.statusCode,
+                statusText: res.statusMessage,
+              });
+            } catch (parseError) {
+              resolve({
+                success,
+                error: `Failed to parse response: ${parseError instanceof Error ? parseError.message : String(parseError)}`,
+                status: res.statusCode,
+                statusText: res.statusMessage,
+              });
+            }
           });
         });
 
@@ -121,18 +130,17 @@ export async function createPreview(
       console.log(`✅ Received response from deploy endpoint`);
 
       console.log(`📥 Response status: ${response.status}`);
-      console.log(`📥 Response headers:`, Object.fromEntries(response.headers.entries()));
+      console.log(`📥 Response statusText: ${response.statusText}`);
 
-      if (!response.ok) {
-        const errorText = await response.text();
+      if (!response.success) {
         console.error(`❌ Preview API returned error: ${response.status}`);
-        console.error(`❌ Error details: ${errorText}`);
+        console.error(`❌ Error details: ${response.error || 'Unknown error'}`);
         throw new Error(
-          `Failed to create preview: ${response.status} ${errorText}`
+          `Failed to create preview: ${response.status} ${response.error || 'Unknown error'}`
         );
       }
 
-      const apiResponse = await response.json();
+      const apiResponse = response;
 
       console.log("📦 API Response:", JSON.stringify(apiResponse, null, 2));
 
@@ -142,13 +150,13 @@ export async function createPreview(
           apiResponse.previewUrl ||
           apiResponse.vercelUrl ||
           `http://localhost:8080/p/${projectId}`,
-        status: apiResponse.status || (apiResponse.isNewDeployment ? "deployed" : "updated"),
-        port: apiResponse.port || 3000, // Use port from response or default to 3000
-        previewUrl: apiResponse.previewUrl,
-        vercelUrl: apiResponse.vercelUrl,
-        aliasSuccess: apiResponse.aliasSuccess,
-        isNewDeployment: apiResponse.isNewDeployment,
-        hasPackageChanges: apiResponse.hasPackageChanges,
+        status: (apiResponse.status as string) || (apiResponse.isNewDeployment ? "deployed" : "updated"),
+        port: (apiResponse.port as number) || 3000, // Use port from response or default to 3000
+        previewUrl: apiResponse.previewUrl as string,
+        vercelUrl: apiResponse.vercelUrl as string,
+        aliasSuccess: apiResponse.aliasSuccess as boolean,
+        isNewDeployment: apiResponse.isNewDeployment as boolean,
+        hasPackageChanges: apiResponse.hasPackageChanges as boolean,
       };
 
       // Store the preview info

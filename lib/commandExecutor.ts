@@ -118,8 +118,17 @@ export class SecureCommandExecutor {
       throw new Error('Working directory outside project bounds');
     }
 
-    if (!fs.existsSync(resolvedPath)) {
-      throw new Error('Working directory does not exist');
+    // For relative paths like 'src', check if the base directory exists
+    // and allow execution even if the specific subdirectory doesn't exist yet
+    if (!fs.existsSync(basePath)) {
+      throw new Error('Project base directory does not exist');
+    }
+    
+    // Only check specific directory existence for absolute paths or if it's not a common relative path
+    if (workingDir !== '.' && !workingDir.startsWith('./') && !['src', 'app', 'components', 'lib', 'public'].includes(workingDir)) {
+      if (!fs.existsSync(resolvedPath)) {
+        throw new Error(`Working directory does not exist: ${workingDir}`);
+      }
     }
   }
 

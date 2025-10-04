@@ -56,48 +56,96 @@ export function applyDiffToContent(
 }
 
 /**
- * Parse unified diff string into hunks
+ * Parse unified diff string into hunks with robust error handling
  */
 export function parseUnifiedDiff(unifiedDiff: string): DiffHunk[] {
   const hunks: DiffHunk[] = [];
   const lines = unifiedDiff.split('\n');
-  
+
   let currentHunk: DiffHunk | null = null;
-  
+
   for (const line of lines) {
     if (line.startsWith('@@')) {
       // Save previous hunk if exists
       if (currentHunk) {
+        // Auto-correct oldLines/newLines if they're 0 but there are actual lines
+        currentHunk = validateAndCorrectHunk(currentHunk);
         hunks.push(currentHunk);
       }
-      
+
       // Parse hunk header: @@ -oldStart,oldLines +newStart,newLines @@
+      // Support various formats including malformed ones
       const match = line.match(/@@ -(\d+),?(\d*) \+(\d+),?(\d*) @@/);
       if (match) {
+        let oldLines = parseInt(match[2]) || 0;
+        let newLines = parseInt(match[4]) || 0;
+
+        // If oldLines or newLines is 0, it's likely a mistake - we'll correct it later
         currentHunk = {
           oldStart: parseInt(match[1]),
-          oldLines: parseInt(match[2]) || 0,
+          oldLines: oldLines,
           newStart: parseInt(match[3]),
-          newLines: parseInt(match[4]) || 0,
+          newLines: newLines,
           lines: []
         };
+      } else {
+        console.warn(`⚠️ Malformed hunk header: ${line}`);
       }
     } else if (currentHunk) {
       currentHunk.lines.push(line);
     }
   }
-  
-  // Add the last hunk
+
+  // Add the last hunk with validation
   if (currentHunk) {
+    currentHunk = validateAndCorrectHunk(currentHunk);
     hunks.push(currentHunk);
   }
-  
+
   return hunks;
+}
+
+/**
+ * Validate and auto-correct common mistakes in diff hunks
+ */
+function validateAndCorrectHunk(hunk: DiffHunk): DiffHunk {
+  // Count actual add/remove/context lines
+  let contextLines = 0;
+  let removeLines = 0;
+  let addLines = 0;
+
+  for (const line of hunk.lines) {
+    if (line.startsWith('+') && !line.startsWith('+++')) {
+      addLines++;
+    } else if (line.startsWith('-') && !line.startsWith('---')) {
+      removeLines++;
+    } else if (line.startsWith(' ') || (!line.startsWith('+') && !line.startsWith('-'))) {
+      contextLines++;
+    }
+  }
+
+  // Calculate expected line counts
+  const expectedOldLines = contextLines + removeLines;
+  const expectedNewLines = contextLines + addLines;
+
+  // Auto-correct if counts don't match
+  if (hunk.oldLines === 0 || hunk.oldLines !== expectedOldLines) {
+    console.log(`🔧 Auto-correcting oldLines: ${hunk.oldLines} → ${expectedOldLines} for hunk at line ${hunk.oldStart}`);
+    hunk.oldLines = expectedOldLines;
+  }
+
+  if (hunk.newLines === 0 || hunk.newLines !== expectedNewLines) {
+    console.log(`🔧 Auto-correcting newLines: ${hunk.newLines} → ${expectedNewLines} for hunk at line ${hunk.newStart}`);
+    hunk.newLines = expectedNewLines;
+  }
+
+  return hunk;
 }
 
 /**
  * Find the best contextual match for a line when exact match fails
  */
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function findBestContextualMatch(
   lines: string[],
   targetLine: string,
@@ -187,76 +235,121 @@ export function applyDiffHunks(
   try {
     const lines = originalContent.split('\n');
     const result: string[] = [...lines];
-    
+
     // Process hunks in reverse order to maintain line numbers
     const sortedHunks = [...diffHunks].sort((a, b) => b.oldStart - a.oldStart);
-    
-    for (let hunkIndex = 0; hunkIndex < sortedHunks.length; hunkIndex++) {
-      const hunk = sortedHunks[hunkIndex];
-      const startIndex = hunk.oldStart - 1; // Convert to 0-based index
-      
-      // Process lines in order to build the replacement
-      const linesToRemove: string[] = [];
-      const linesToAdd: string[] = [];
-      
-      for (const line of hunk.lines) {
-        if (line.startsWith('-')) {
-          // Mark line for removal
-          const lineToRemove = line.substring(1);
-          linesToRemove.push(lineToRemove);
-        } else if (line.startsWith('+')) {
-          // Add new line
-          const lineToAdd = line.substring(1);
-          linesToAdd.push(lineToAdd);
+
+    for (const hunk of sortedHunks) {
+      let startLineIndex = hunk.oldStart - 1; // Convert to 0-based index
+
+      // Parse hunk to extract context, removes, and adds
+      const parsedLines: Array<{ type: 'remove' | 'add' | 'context'; line: string }> = [];
+      for (const diffLine of hunk.lines) {
+        if (diffLine.startsWith('-')) {
+          parsedLines.push({ type: 'remove', line: diffLine.substring(1) });
+        } else if (diffLine.startsWith('+')) {
+          parsedLines.push({ type: 'add', line: diffLine.substring(1) });
+        } else {
+          const lineContent = diffLine.startsWith(' ') ? diffLine.substring(1) : diffLine;
+          parsedLines.push({ type: 'context', line: lineContent });
         }
       }
-      
-      // Find the exact lines to remove and replace them
-      if (linesToRemove.length > 0) {
-        // Find the first occurrence of the line to remove
-        let removeIndex = -1;
-        for (let i = startIndex; i < Math.min(startIndex + linesToRemove.length, result.length); i++) {
-          const currentLine = result[i] || '';
-          const targetLine = linesToRemove[0];
-          const match = currentLine.trim() === targetLine.trim();
-          
-          if (match) {
-            removeIndex = i;
+
+      // Find the actual start position by matching the first context line
+      const firstContextLine = parsedLines.find(p => p.type === 'context');
+      if (firstContextLine) {
+        // Search for the first context line within a wider range for better fuzzy matching
+        const searchStart = Math.max(0, startLineIndex - 50);
+        const searchEnd = Math.min(result.length, startLineIndex + 50);
+
+        for (let i = searchStart; i < searchEnd; i++) {
+          if (result[i] && result[i].trim() === firstContextLine.line.trim()) {
+            startLineIndex = i;
             break;
           }
         }
-        
-        if (removeIndex !== -1) {
-          // Remove the old lines
-          result.splice(removeIndex, linesToRemove.length);
-          
-          // Insert new lines at the same position
-          if (linesToAdd.length > 0) {
-            result.splice(removeIndex, 0, ...linesToAdd);
-          }
+      }
+
+      // Build operations with corrected indices
+      const operations: Array<{ type: 'remove' | 'add' | 'context'; line: string; index: number }> = [];
+      let currentLineIndex = startLineIndex;
+
+      for (const parsed of parsedLines) {
+        if (parsed.type === 'remove') {
+          operations.push({ type: 'remove', line: parsed.line, index: currentLineIndex });
+          currentLineIndex++;
+        } else if (parsed.type === 'add') {
+          operations.push({ type: 'add', line: parsed.line, index: currentLineIndex });
         } else {
-          // Enhanced fallback: find the best contextual match
-          let bestMatch = findBestContextualMatch(result, linesToRemove[0], startIndex, hunk.lines);
-          
-          if (bestMatch.index !== -1) {
-            // Remove the matched line
-            result.splice(bestMatch.index, 1);
-            // Insert new lines at the same position
-            if (linesToAdd.length > 0) {
-              result.splice(bestMatch.index, 0, ...linesToAdd);
-            }
-          } else {
-            if (linesToAdd.length > 0) {
-              result.splice(startIndex, 0, ...linesToAdd);
+          operations.push({ type: 'context', line: parsed.line, index: currentLineIndex });
+          currentLineIndex++;
+        }
+      }
+
+      // Verify context lines match before applying changes
+      // Skip validation if hunk has no context lines (pure insertions)
+      const hasContextLines = operations.some(op => op.type === 'context');
+      let contextMatches = true;
+
+      if (hasContextLines) {
+        for (const op of operations) {
+          if (op.type === 'context') {
+            if (result[op.index] !== undefined && result[op.index].trim() !== op.line.trim()) {
+              contextMatches = false;
+              console.warn(`Context mismatch at line ${op.index + 1}: expected "${op.line.trim()}", got "${result[op.index].trim()}"`);
+              break;
             }
           }
         }
-      } else if (linesToAdd.length > 0) {
-        // No lines to remove, just add new lines after the specified position
-        result.splice(startIndex + 1, 0, ...linesToAdd);
+
+        if (!contextMatches) {
+          console.warn(`Skipping hunk at line ${hunk.oldStart} due to context mismatch`);
+          continue;
+        }
+      }
+
+      // Apply operations: process removes and adds together to maintain proper ordering
+      // Group consecutive operations by their index
+      const grouped: Array<{ index: number; removes: string[]; adds: string[] }> = [];
+      let currentGroup: { index: number; removes: string[]; adds: string[] } | null = null;
+
+      for (const op of operations) {
+        if (op.type === 'remove' || op.type === 'add') {
+          if (!currentGroup || currentGroup.index !== op.index) {
+            if (currentGroup) {
+              grouped.push(currentGroup);
+            }
+            currentGroup = { index: op.index, removes: [], adds: [] };
+          }
+
+          if (op.type === 'remove') {
+            currentGroup.removes.push(op.line);
+          } else {
+            currentGroup.adds.push(op.line);
+          }
+        }
+      }
+
+      if (currentGroup) {
+        grouped.push(currentGroup);
+      }
+
+      // Apply grouped operations in reverse order to maintain indices
+      for (let i = grouped.length - 1; i >= 0; i--) {
+        const group = grouped[i];
+
+        // Remove lines
+        if (group.removes.length > 0) {
+          result.splice(group.index, group.removes.length);
+        }
+
+        // Add lines at the same position
+        if (group.adds.length > 0) {
+          result.splice(group.index, 0, ...group.adds);
+        }
       }
     }
-    
+
     return result.join('\n');
   } catch (error) {
     console.error('Error applying diff:', error);

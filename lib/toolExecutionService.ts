@@ -12,7 +12,7 @@ const createDebugLogDir = (projectId: string): string => {
   return debugDir;
 };
 
-const logStageResponse = (projectId: string, stageName: string, response: string, metadata?: any): void => {
+const logStageResponse = (projectId: string, stageName: string, response: string, metadata?: Record<string, unknown>): void => {
   try {
     const debugDir = createDebugLogDir(projectId);
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
@@ -78,19 +78,25 @@ export async function executeToolCalls(
       // Fix working directory and args for common tools
       let fixedToolCall = { ...toolCall };
       
-      if (toolCall.tool === 'cat' && toolCall.args.length > 0) {
-        // For cat commands, if the file path includes the working directory, adjust it
-        const filePath = toolCall.args[0];
+      // Fix common path issues for all tools
+      if (toolCall.args.length > 0) {
         const workingDir = toolCall.workingDirectory || '.';
+        const fixedArgs = toolCall.args.map(arg => {
+          // If the argument is a file path that starts with the working directory, make it relative
+          if (arg.startsWith(workingDir + '/')) {
+            return arg.substring(workingDir.length + 1);
+          }
+          // If the argument is just the working directory name (like 'src'), keep it as is
+          return arg;
+        });
         
-        if (filePath.startsWith(workingDir + '/')) {
-          // Remove the working directory prefix from the file path
-          const relativePath = filePath.substring(workingDir.length + 1);
+        // Check if any args were changed
+        if (JSON.stringify(fixedArgs) !== JSON.stringify(toolCall.args)) {
           fixedToolCall = {
             ...toolCall,
-            args: [relativePath]
+            args: fixedArgs
           };
-          console.log(`🔧 Fixed cat command: ${toolCall.tool} ${fixedToolCall.args.join(' ')} (was: ${toolCall.args.join(' ')})`);
+          console.log(`🔧 Fixed ${toolCall.tool} command: ${fixedToolCall.args.join(' ')} (was: ${toolCall.args.join(' ')})`);
         }
       }
       

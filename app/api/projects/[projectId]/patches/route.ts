@@ -4,7 +4,7 @@ import { authenticateRequest } from "../../../../../lib/auth";
 
 export async function GET(
   request: NextRequest,
-  { params }: { params: { projectId: string } }
+  { params }: { params: Promise<{ projectId: string }> }
 ) {
   try {
     const { user, isAuthorized, error } = await authenticateRequest(request);
@@ -15,7 +15,7 @@ export async function GET(
       );
     }
 
-    const { projectId } = params;
+    const { projectId } = await params;
 
     if (!projectId) {
       return NextResponse.json(
@@ -45,7 +45,8 @@ export async function GET(
 
 export async function POST(
   request: NextRequest,
-  { params }: { params: { projectId: string } }
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  { params }: { params: Promise<{ projectId: string }> }
 ) {
   try {
     const { user, isAuthorized, error } = await authenticateRequest(request);

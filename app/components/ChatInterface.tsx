@@ -120,7 +120,7 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
         };
 
         loadChatMessages();
-    }, [currentProject?.projectId, sessionToken]);
+    }, [currentProject?.projectId, sessionToken, currentPhase, chat.length, aiLoading, currentProject]);
 
     // Show warning message once when user hasn't started chatting
     useEffect(() => {
@@ -208,6 +208,18 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
                     if (updateResponse.ok) {
                         const updateData = await updateResponse.json();
                         console.log('✅ Changes applied successfully:', updateData.changed);
+
+                        // Update currentProject with new preview URL to refresh iframe
+                        if (currentProject) {
+                            const updatedProject: GeneratedProject = {
+                                ...currentProject,
+                                previewUrl: updateData.previewUrl || currentProject.previewUrl,
+                                vercelUrl: updateData.vercelUrl || currentProject.vercelUrl,
+                                url: updateData.previewUrl || updateData.vercelUrl || currentProject.url,
+                            };
+                            console.log('🔄 Updating preview URL:', updatedProject.previewUrl);
+                            onProjectGenerated(updatedProject);
+                        }
 
                         // Update the last AI message with success
                         setChat(prev => {
