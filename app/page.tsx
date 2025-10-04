@@ -1,6 +1,9 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+
+// Force dynamic rendering
+export const dynamic = 'force-dynamic';
 import { CodeGenerator } from './components/CodeGenerator';
 import { ChatInterface } from './components/ChatInterface';
 import ProtectedRoute from './components/ProtectedRoute';

@@ -77,8 +77,8 @@ export function parseUnifiedDiff(unifiedDiff: string): DiffHunk[] {
       // Support various formats including malformed ones
       const match = line.match(/@@ -(\d+),?(\d*) \+(\d+),?(\d*) @@/);
       if (match) {
-        let oldLines = parseInt(match[2]) || 0;
-        let newLines = parseInt(match[4]) || 0;
+        const oldLines = parseInt(match[2]) || 0;
+        const newLines = parseInt(match[4]) || 0;
 
         // If oldLines or newLines is 0, it's likely a mistake - we'll correct it later
         currentHunk = {

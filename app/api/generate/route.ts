@@ -792,9 +792,10 @@ export async function PATCH(request: NextRequest) {
               undefined
             );
             console.log(`✅ Test user created with ID: ${dbUser.id}`);
-          } catch (createError: any) {
+          } catch (createError: unknown) {
             // Handle duplicate key error gracefully
-            if (createError.code === '23505' && createError.constraint === 'users_privy_user_id_unique') {
+            if (createError && typeof createError === 'object' && 'code' in createError && 'constraint' in createError && 
+                createError.code === '23505' && createError.constraint === 'users_privy_user_id_unique') {
               console.log("ℹ️ Test user already exists, fetching from database...");
               dbUser = await getUserById(testUserId);
             } else {
@@ -959,7 +960,7 @@ export async function PATCH(request: NextRequest) {
           console.log(`⚠️ Project ${projectId} not found in database, creating it...`);
           
           // Create the project in the database
-          const project = await createProject(
+          await createProject(
             user.id,
             `Project ${projectId.substring(0, 8)}`,
             `AI-generated project updated via PATCH`,
