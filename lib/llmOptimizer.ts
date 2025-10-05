@@ -23,11 +23,6 @@ const createDebugLogDir = (projectId: string): string => {
 
 const logStageResponse = (projectId: string, stageName: string, response: string, metadata?: Record<string, unknown>): void => {
   try {
-    const debugDir = createDebugLogDir(projectId);
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const filename = `${stageName}-${timestamp}.log`;
-    const filepath = path.join(debugDir, filename);
-    
     const logContent = {
       timestamp: new Date().toISOString(),
       stage: stageName,
@@ -37,8 +32,19 @@ const logStageResponse = (projectId: string, stageName: string, response: string
       response: response
     };
     
-    fs.writeFileSync(filepath, JSON.stringify(logContent, null, 2));
-    console.log(`📝 Debug log saved: ${filepath}`);
+    // In production (Vercel), use structured console logging instead of file system
+    if (process.env.NODE_ENV === 'production') {
+      console.log(`[${stageName}] ${JSON.stringify(logContent)}`);
+    } else {
+      // In development, still write to files
+      const debugDir = createDebugLogDir(projectId);
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const filename = `${stageName}-${timestamp}.log`;
+      const filepath = path.join(debugDir, filename);
+      
+      fs.writeFileSync(filepath, JSON.stringify(logContent, null, 2));
+      console.log(`📝 Debug log saved: ${filepath}`);
+    }
   } catch (error) {
     console.error('Failed to write debug log:', error);
   }

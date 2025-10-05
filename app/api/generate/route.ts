@@ -6,6 +6,7 @@ import { exec } from "child_process";
 import { promisify } from "util";
 import { createProject, saveProjectFiles, savePatch, getUserById, createUser, getProjectById } from "../../../lib/database";
 import { authenticateRequest } from "../../../lib/auth";
+import { logger, logApiRequest, logErrorWithContext } from "../../../lib/logger";
 
 const execAsync = promisify(exec);
 import {
@@ -382,7 +383,12 @@ function generateProjectName(intentSpec: { feature: string; reason?: string }): 
 }
 
 export async function POST(request: NextRequest) {
+  const requestId = uuidv4();
+  const startTime = Date.now();
+  
   try {
+    logApiRequest('POST', '/api/generate', { requestId, startTime });
+    
     // Check for auth bypass (testing only)
     const bypassAuth = request.headers.get("X-Bypass-Auth") === "true";
     const testUserId = request.headers.get("X-Test-User-Id");
@@ -391,20 +397,20 @@ export async function POST(request: NextRequest) {
     let isAuthorized;
 
     if (bypassAuth && testUserId) {
-      console.log("⚠️ AUTH BYPASS ENABLED FOR TESTING");
+      logger.warn("AUTH BYPASS ENABLED FOR TESTING", { requestId, testUserId });
 
       // Check if test user exists in database, create if not
       try {
         let dbUser = await getUserById(testUserId);
         if (!dbUser) {
-          console.log("🔧 Creating test user in database...");
+          logger.info("Creating test user in database", { requestId, testUserId });
           dbUser = await createUser(
             testUserId, // Use UUID as privyUserId too
             "test@example.com",
             "Test User",
             undefined
           );
-          console.log(`✅ Test user created with ID: ${dbUser.id}`);
+          logger.info("Test user created", { requestId, userId: dbUser.id });
         }
 
         user = {
@@ -755,12 +761,21 @@ export async function POST(request: NextRequest) {
       hasPackageChanges: previewData.hasPackageChanges,
     });
   } catch (err) {
-    console.error("❌ Error generating project:", err);
+    const duration = Date.now() - startTime;
+    logErrorWithContext(err as Error, 'Project generation request', requestId);
+    logger.error("Project generation failed", { 
+      requestId, 
+      duration, 
+      error: err instanceof Error ? err.message : String(err) 
+    });
+    
     return NextResponse.json(
       {
         error: "Failed to generate project",
         details: err instanceof Error ? err.message : String(err),
         stack: err instanceof Error && err.stack ? err.stack : undefined,
+        requestId,
+        duration
       },
       { status: 500 }
     );
@@ -768,7 +783,11 @@ export async function POST(request: NextRequest) {
 }
 
 export async function PATCH(request: NextRequest) {
+  const requestId = uuidv4();
+  const startTime = Date.now();
+  
   try {
+    logApiRequest('PATCH', '/api/generate', { requestId, startTime });
     // Check for auth bypass (testing only)
     const bypassAuth = request.headers.get("X-Bypass-Auth") === "true";
     const testUserId = request.headers.get("X-Test-User-Id");
@@ -1127,12 +1146,21 @@ export async function PATCH(request: NextRequest) {
       });
     }
   } catch (err) {
-    console.error("Error in LLM PATCH:", err);
+    const duration = Date.now() - startTime;
+    logErrorWithContext(err as Error, 'LLM PATCH request', requestId);
+    logger.error("Request failed", { 
+      requestId, 
+      duration, 
+      error: err instanceof Error ? err.message : String(err) 
+    });
+    
     return NextResponse.json(
       {
         error: "Failed to apply LLM changes",
         details: err instanceof Error ? err.message : String(err),
         stack: err instanceof Error && err.stack ? err.stack : undefined,
+        requestId,
+        duration
       },
       { status: 500 }
     );
