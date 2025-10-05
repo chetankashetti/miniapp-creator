@@ -234,7 +234,7 @@ export async function DELETE(request: NextRequest) {
     }
 
     // Delete from local filesystem
-    const generatedDir = path.join(process.cwd(), "generated", projectId);
+    const generatedDir = path.join("/tmp/generated", projectId);
     const localFilePath = path.join(generatedDir, filename);
 
     try {

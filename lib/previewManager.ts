@@ -257,7 +257,7 @@ export async function saveFilesToGenerated(
   projectId: string,
   files: { filename: string; content: string }[]
 ): Promise<void> {
-  const generatedDir = path.join(process.cwd(), "generated", projectId);
+  const generatedDir = path.join("/tmp/generated", projectId);
 
   console.log(
     `💾 Saving ${files.length} files to generated directory: ${generatedDir}`
@@ -284,7 +284,7 @@ export async function saveFilesToGenerated(
 
 // List files from generated directory
 export async function listGeneratedFiles(projectId: string): Promise<string[]> {
-  const generatedDir = path.join(process.cwd(), "generated", projectId);
+  const generatedDir = path.join("/tmp/generated", projectId);
 
   try {
     if (!(await fs.pathExists(generatedDir))) {
@@ -347,7 +347,7 @@ export async function getGeneratedFile(
   projectId: string,
   filePath: string
 ): Promise<string | null> {
-  const generatedDir = path.join(process.cwd(), "generated", projectId);
+  const generatedDir = path.join("/tmp/generated", projectId);
   const fullPath = path.join(generatedDir, filePath);
 
   try {
@@ -367,7 +367,7 @@ export async function updateGeneratedFile(
   filename: string,
   content: string
 ): Promise<void> {
-  const generatedDir = path.join(process.cwd(), "generated", projectId);
+  const generatedDir = path.join("/tmp/generated", projectId);
   const filePath = path.join(generatedDir, filename);
 
   try {
@@ -385,7 +385,7 @@ export async function deleteGeneratedFile(
   projectId: string,
   filename: string
 ): Promise<void> {
-  const generatedDir = path.join(process.cwd(), "generated", projectId);
+  const generatedDir = path.join("/tmp/generated", projectId);
   const filePath = path.join(generatedDir, filename);
 
   try {
@@ -433,7 +433,7 @@ export async function storeDiffs(
   projectId: string,
   diffs: Array<{ filename: string; hunks: unknown[]; unifiedDiff: string }>
 ): Promise<void> {
-  const patchesDir = path.join(process.cwd(), "generated", projectId, "patches");
+  const patchesDir = path.join("/tmp/generated", projectId, "patches");
   
   try {
     await fs.ensureDir(patchesDir);
@@ -451,7 +451,7 @@ export async function storeDiffs(
 
 // Get stored diffs for rollback
 export async function getStoredDiffs(projectId: string): Promise<Array<{ filename: string; hunks: unknown[]; unifiedDiff: string }>> {
-  const patchesDir = path.join(process.cwd(), "generated", projectId, "patches");
+  const patchesDir = path.join("/tmp/generated", projectId, "patches");
   
   try {
     if (!(await fs.pathExists(patchesDir))) {
