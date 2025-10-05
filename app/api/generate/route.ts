@@ -558,12 +558,14 @@ export async function POST(request: NextRequest) {
 
     // Generate unique project ID
     const projectId = uuidv4();
-    const userDir = path.join(process.cwd(), "generated", projectId);
-    const boilerplateDir = path.join(
-      process.cwd(),
-      "generated",
-      `${projectId}-boilerplate`
-    );
+    
+    // Use /tmp directory for Vercel serverless environment
+    const outputDir = '/tmp/generated';
+    const userDir = path.join(outputDir, projectId);
+    const boilerplateDir = path.join(outputDir, `${projectId}-boilerplate`);
+    
+    // Ensure /tmp/generated directory exists
+    fs.mkdirSync(outputDir, { recursive: true });
 
     console.log(`📁 Project ID: ${projectId}`);
     console.log(`📁 User directory: ${userDir}`);
@@ -938,7 +940,12 @@ export async function PATCH(request: NextRequest) {
       );
     }
 
-    const userDir = path.join(process.cwd(), "generated", projectId);
+    // Use /tmp directory for Vercel serverless environment
+    const outputDir = '/tmp/generated';
+    const userDir = path.join(outputDir, projectId);
+    
+    // Ensure /tmp/generated directory exists
+    fs.mkdirSync(outputDir, { recursive: true });
 
     // Read all files in the project (excluding node_modules, .next, etc.)
     const currentFiles = await readAllFiles(userDir);
