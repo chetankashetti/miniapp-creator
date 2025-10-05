@@ -29,9 +29,6 @@
       ]
     }
   ],
-  "regions": ["iad1"],
-  "logging": {
-    "level": "info"
-  }
+  "regions": ["iad1"]
 }
 
