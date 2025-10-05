@@ -97,6 +97,80 @@ async function writeFilesToDir(
   }
 }
 
+// Utility: Fetch boilerplate from GitHub API
+async function fetchBoilerplateFromGitHub(targetDir: string) {
+  const repoOwner = "chetankashetti";
+  const repoName = "minidev-boilerplate";
+  
+  // Fetch repository contents recursively
+  async function fetchDirectoryContents(dirPath: string = ""): Promise<void> {
+    const url = `https://api.github.com/repos/${repoOwner}/${repoName}/contents/${dirPath}`;
+    
+    const response = await fetch(url, {
+      headers: {
+        'Accept': 'application/vnd.github.v3+json',
+        'User-Agent': 'minidev-app'
+      }
+    });
+    
+    if (!response.ok) {
+      throw new Error(`GitHub API error: ${response.status} ${response.statusText}`);
+    }
+    
+    const contents = await response.json();
+    
+    for (const item of contents) {
+      const itemPath = dirPath ? path.join(dirPath, item.name) : item.name;
+      
+      // Skip certain files/directories
+      if (
+        item.name === "node_modules" ||
+        item.name === ".git" ||
+        item.name === ".next" ||
+        item.name === "dist" ||
+        item.name === "build" ||
+        item.name === "pnpm-lock.yaml" ||
+        item.name === "package-lock.json" ||
+        item.name === "yarn.lock" ||
+        item.name === "bun.lockb" ||
+        item.name === "pnpm-workspace.yaml" ||
+        item.name === ".DS_Store" ||
+        item.name.startsWith(".")
+      ) {
+        continue;
+      }
+      
+      if (item.type === "file") {
+        // Fetch file content
+        const fileResponse = await fetch(item.download_url);
+        if (!fileResponse.ok) {
+          console.warn(`⚠️ Failed to fetch file ${itemPath}: ${fileResponse.status}`);
+          continue;
+        }
+        
+        const content = await fileResponse.text();
+        
+        // Check for binary content
+        if (content.includes('\0') || content.includes('\x00')) {
+          console.log(`⚠️ Skipping binary file: ${itemPath}`);
+          continue;
+        }
+        
+        // Write file to target directory
+        const filePath = path.join(targetDir, itemPath);
+        await fs.ensureDir(path.dirname(filePath));
+        await fs.writeFile(filePath, content, "utf8");
+        
+      } else if (item.type === "dir") {
+        // Recursively fetch directory contents
+        await fetchDirectoryContents(itemPath);
+      }
+    }
+  }
+  
+  await fetchDirectoryContents();
+}
+
 // Enhanced LLM caller with stage-specific model selection and retry logic
 async function callClaudeWithLogging(
   systemPrompt: string,
@@ -499,17 +573,14 @@ export async function POST(request: NextRequest) {
     console.log(`📁 User directory: ${userDir}`);
     console.log(`📁 Boilerplate directory: ${boilerplateDir}`);
 
-    // Clone boilerplate from GitHub
-    // Comment out GitHub clone since it's not working
-    console.log("📋 Cloning boilerplate from GitHub...");
+    // Fetch boilerplate from GitHub API instead of git clone
+    console.log("📋 Fetching boilerplate from GitHub API...");
     try {
-      await execAsync(
-        `git clone https://github.com/chetankashetti/minidev-boilerplate.git "${boilerplateDir}"`
-      );
-      console.log("✅ Boilerplate cloned successfully");
+      await fetchBoilerplateFromGitHub(boilerplateDir);
+      console.log("✅ Boilerplate fetched successfully");
     } catch (error) {
-      console.error("❌ Failed to clone boilerplate:", error);
-      throw new Error(`Failed to clone boilerplate: ${error}`);
+      console.error("❌ Failed to fetch boilerplate:", error);
+      throw new Error(`Failed to fetch boilerplate: ${error}`);
     }
 
     // Copy from local minidev-boilerplate folder instead
