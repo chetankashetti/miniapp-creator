@@ -2216,6 +2216,17 @@ export async function executeMultiStagePipeline(
           "STAGE_4_VALIDATOR"
         );
 
+        // Log Stage 4 response for debugging
+        if (projectId) {
+          logStageResponse(projectId, 'stage4-validator', rewrittenFiles, {
+            systemPromptLength: getStage4ValidatorPrompt(invalidFiles, errors, isInitialGeneration).length,
+            userPromptLength: 0, // Stage 4 doesn't use a user prompt
+            responseTime: 0, // We don't have timing info here
+            invalidFiles: invalidFiles,
+            errors: errors
+          });
+        }
+
         // Parse rewritten files with robust JSON parsing
         let rewrittenFilesParsed: { filename: string; content: string; unifiedDiff?: string; diffHunks?: DiffHunk[] }[];
         
