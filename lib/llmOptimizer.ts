@@ -2192,8 +2192,17 @@ export async function executeMultiStagePipeline(
       console.log("  React Error Details:", reactValidation.reactErrors);
     }
 
-    if (hasValidationErrors) {
-      console.log("⚠️ Validation failed, attempting fixes...");
+    // For initial generation, always run Stage 4 validation on all files
+    // For follow-up changes, only run Stage 4 if there are validation errors
+    const shouldRunStage4 = isInitialGeneration || hasValidationErrors;
+    
+    if (shouldRunStage4) {
+      if (isInitialGeneration) {
+        console.log("📝 Initial generation - running Stage 4 validation on all files");
+      } else {
+        console.log("⚠️ Validation failed, attempting fixes...");
+      }
+      
       const errors = [
         ...validation.missingFiles.map((f) => f), // Already formatted as error messages
         ...importValidation.missingImports.map(
@@ -2236,61 +2245,74 @@ export async function executeMultiStagePipeline(
         );
       });
 
-      // Enhanced file filtering - be more conservative about what gets regenerated
-      // Only regenerate files with critical errors that would prevent compilation
-      validFiles = generatedFiles.filter((file) => {
-        const isMissingFile = validation.missingFiles.some((f) =>
-          f.includes(file.filename)
-        );
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        const isMissingClientDirective =
-          clientDirectiveValidation.missingClientDirective.some(
-            (m) => m.file === file.filename
-          );
-        const hasTypeScriptError = typescriptValidation.typeErrors.some(
-          (t) => t.file === file.filename
-        );
-        const hasReactError = reactValidation.reactErrors.some(
-          (r) => r.file === file.filename
-        );
-
-        // Only keep files that don't have critical compilation errors
-        // Missing imports might be false positives for diff files, so be more conservative
-        const hasCriticalError = isMissingFile || 
-                                isMissingClientDirective || // Always flag missing 'use client' directive
-                                hasTypeScriptError || // Always flag TypeScript errors
-                                hasReactError; // Always flag React errors
+      if (isInitialGeneration) {
+        // For initial generation, send ALL files to Stage 4 for final validation and formatting
+        console.log("📝 Initial generation - sending all files to Stage 4 for final validation");
+        validFiles = [];
+        invalidFiles = generatedFiles.map(file => ({
+          filename: file.filename,
+          content: file.content || '' // Ensure content is always a string
+        }));
+      } else {
+        // For follow-up changes, only send files with critical errors
+        console.log("🔧 Follow-up changes - only sending files with critical errors to Stage 4");
         
-        return !hasCriticalError;
-      });
-
-      invalidFiles = generatedFiles.filter((file) => {
-        const isMissingFile = validation.missingFiles.some((f) =>
-          f.includes(file.filename)
-        );
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        const isMissingClientDirective =
-          clientDirectiveValidation.missingClientDirective.some(
-            (m) => m.file === file.filename
+        // Enhanced file filtering - be more conservative about what gets regenerated
+        // Only regenerate files with critical errors that would prevent compilation
+        validFiles = generatedFiles.filter((file) => {
+          const isMissingFile = validation.missingFiles.some((f) =>
+            f.includes(file.filename)
           );
-        const hasTypeScriptError = typescriptValidation.typeErrors.some(
-          (t) => t.file === file.filename
-        );
-        const hasReactError = reactValidation.reactErrors.some(
-          (r) => r.file === file.filename
-        );
+          // eslint-disable-next-line @typescript-eslint/no-unused-vars
+          const isMissingClientDirective =
+            clientDirectiveValidation.missingClientDirective.some(
+              (m) => m.file === file.filename
+            );
+          const hasTypeScriptError = typescriptValidation.typeErrors.some(
+            (t) => t.file === file.filename
+          );
+          const hasReactError = reactValidation.reactErrors.some(
+            (r) => r.file === file.filename
+          );
 
-        // Only mark as invalid if there are critical compilation errors
-        const hasCriticalError = isMissingFile || 
-                                isMissingClientDirective || // Always flag missing 'use client' directive
-                                hasTypeScriptError || // Always flag TypeScript errors
-                                hasReactError; // Always flag React errors
-        
-        return hasCriticalError;
-      }).map(file => ({
-        filename: file.filename,
-        content: file.content || '' // Ensure content is always a string
-      }));
+          // Only keep files that don't have critical compilation errors
+          // Missing imports might be false positives for diff files, so be more conservative
+          const hasCriticalError = isMissingFile || 
+                                  isMissingClientDirective || // Always flag missing 'use client' directive
+                                  hasTypeScriptError || // Always flag TypeScript errors
+                                  hasReactError; // Always flag React errors
+          
+          return !hasCriticalError;
+        });
+
+        invalidFiles = generatedFiles.filter((file) => {
+          const isMissingFile = validation.missingFiles.some((f) =>
+            f.includes(file.filename)
+          );
+          // eslint-disable-next-line @typescript-eslint/no-unused-vars
+          const isMissingClientDirective =
+            clientDirectiveValidation.missingClientDirective.some(
+              (m) => m.file === file.filename
+            );
+          const hasTypeScriptError = typescriptValidation.typeErrors.some(
+            (t) => t.file === file.filename
+          );
+          const hasReactError = reactValidation.reactErrors.some(
+            (r) => r.file === file.filename
+          );
+
+          // Only mark as invalid if there are critical compilation errors
+          const hasCriticalError = isMissingFile || 
+                                  isMissingClientDirective || // Always flag missing 'use client' directive
+                                  hasTypeScriptError || // Always flag TypeScript errors
+                                  hasReactError; // Always flag React errors
+          
+          return hasCriticalError;
+        }).map(file => ({
+          filename: file.filename,
+          content: file.content || '' // Ensure content is always a string
+        }));
+      }
 
       console.log("📁 Files to keep:", validFiles.length);
       validFiles.forEach((file) => console.log(`  ✅ Keep: ${file.filename}`));
