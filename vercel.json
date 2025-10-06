@@ -23,7 +23,7 @@
         },
         {
           "key": "Content-Security-Policy",
-          "value": "frame-ancestors *; script-src 'self' 'unsafe-eval' 'unsafe-inline' data: blob: https://cdn.jsdelivr.net; connect-src 'self' https://cdn.jsdelivr.net;"
+          "value": "frame-ancestors *; script-src 'self' 'unsafe-eval' 'unsafe-inline' data: blob: https://cdn.jsdelivr.net; connect-src 'self' https://cdn.jsdelivr.net https://auth.privy.io https://api.anthropic.com https://minidev.fun https://sepolia.base.org;"
         }
       ]
     }
