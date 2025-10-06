@@ -57,14 +57,22 @@ const EXCLUDED_FILES = [
 async function fetchFileContent(filePath: string, projectId?: string, sessionToken?: string): Promise<string> {
     if (projectId && sessionToken) {
         try {
+            console.log(`🌐 Fetching file from API: /api/files?file=${encodeURIComponent(filePath)}&projectId=${projectId}`);
             const response = await fetch(`/api/files?file=${encodeURIComponent(filePath)}&projectId=${projectId}`, {
                 headers: { 'Authorization': `Bearer ${sessionToken}` }
             });
+            console.log(`📡 API response status: ${response.status} ${response.statusText}`);
             if (response.ok) {
-                return await response.text();
+                const content = await response.text();
+                console.log(`✅ File content received: ${content.length} characters`);
+                return content;
+            } else {
+                console.error(`❌ API error: ${response.status} ${response.statusText}`);
+                const errorText = await response.text();
+                console.error(`❌ Error response: ${errorText}`);
             }
         } catch (error) {
-            console.warn(`Failed to fetch file ${filePath}:`, error);
+            console.error(`❌ Network error fetching file ${filePath}:`, error);
         }
     }
     return '// File not found or error loading content';
@@ -96,18 +104,30 @@ async function fetchProjectFilesFromDB(projectId: string, sessionToken?: string)
 // Fetch file content from database
 async function fetchFileContentFromDB(filePath: string, projectId: string, sessionToken: string): Promise<string> {
     try {
+        console.log(`🗄️ Fetching file from database: /api/projects/${projectId}`);
         const response = await fetch(`/api/projects/${projectId}`, {
             headers: { 'Authorization': `Bearer ${sessionToken}` }
         });
 
+        console.log(`📡 Database API response status: ${response.status} ${response.statusText}`);
         if (response.ok) {
             const data = await response.json();
             const files = data.project?.files || [];
+            console.log(`📁 Database files found: ${files.length} files`);
             const file = files.find((f: { filename: string; content: string }) => f.filename === filePath);
-            return file?.content || '// File not found';
+            if (file) {
+                console.log(`✅ File found in database: ${filePath} (${file.content.length} chars)`);
+                return file.content;
+            } else {
+                console.log(`❌ File not found in database: ${filePath}`);
+            }
+        } else {
+            console.error(`❌ Database API error: ${response.status} ${response.statusText}`);
+            const errorText = await response.text();
+            console.error(`❌ Database error response: ${errorText}`);
         }
     } catch (error) {
-        console.warn(`Failed to fetch file ${filePath} from database:`, error);
+        console.error(`❌ Network error fetching file ${filePath} from database:`, error);
     }
     return '// File not found or error loading content';
 }
@@ -287,6 +307,7 @@ export function CodeEditor({ currentProject, onFileChange }: CodeEditorProps) {
     const [selectedFile, setSelectedFile] = useState<string>('');
     const [fileContent, setFileContent] = useState<string>('');
     const [fileTree, setFileTree] = useState<FileNode[]>([]);
+    const [isLoadingContent, setIsLoadingContent] = useState<boolean>(false);
     const { sessionToken } = useAuthContext();
     // const [isSaving, setIsSaving] = useState(false);
     // const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
@@ -331,19 +352,42 @@ export function CodeEditor({ currentProject, onFileChange }: CodeEditorProps) {
     useEffect(() => {
         if (currentProject && selectedFile && sessionToken) {
             console.log(`🔍 Loading file content for: ${selectedFile} in project: ${currentProject.projectId}`);
+            console.log(`🌍 Environment: ${process.env.NODE_ENV} | URL: ${window.location.origin}`);
+            console.log(`🔑 Session token present: ${!!sessionToken}`);
+            
+            setIsLoadingContent(true);
+            setFileContent(''); // Clear previous content
+            
+            // Set a timeout to prevent infinite loading
+            const timeoutId = setTimeout(() => {
+                console.error(`⏰ Timeout loading file content for: ${selectedFile}`);
+                setIsLoadingContent(false);
+                setFileContent('// File loading timeout - please try again');
+            }, 10000); // 10 second timeout
+            
             // Try database first, then fallback to file system
             fetchFileContentFromDB(selectedFile, currentProject.projectId, sessionToken).then(content => {
+                clearTimeout(timeoutId);
                 console.log(`📄 Database content for ${selectedFile}:`, content.substring(0, 100) + '...');
                 if (content !== '// File not found or error loading content') {
+                    console.log(`✅ Setting file content from database: ${content.length} chars`);
                     setFileContent(content);
+                    setIsLoadingContent(false);
                 } else {
                     console.log(`⚠️ File not found in database, trying file system for: ${selectedFile}`);
                     // Fallback to file system
                     fetchFileContent(selectedFile, currentProject.projectId, sessionToken).then(fileSystemContent => {
                         console.log(`📄 File system content for ${selectedFile}:`, fileSystemContent.substring(0, 100) + '...');
+                        console.log(`✅ Setting file content from file system: ${fileSystemContent.length} chars`);
                         setFileContent(fileSystemContent);
+                        setIsLoadingContent(false);
                     });
                 }
+            }).catch(error => {
+                clearTimeout(timeoutId);
+                console.error(`❌ Error loading file content:`, error);
+                setFileContent('// Error loading file content');
+                setIsLoadingContent(false);
             });
         } else {
             console.log(`⚠️ Missing requirements for file loading:`, {
@@ -351,6 +395,7 @@ export function CodeEditor({ currentProject, onFileChange }: CodeEditorProps) {
                 hasSelectedFile: !!selectedFile,
                 hasSessionToken: !!sessionToken
             });
+            setIsLoadingContent(false);
         }
     }, [selectedFile, currentProject, sessionToken]);
 
@@ -440,22 +485,38 @@ export function CodeEditor({ currentProject, onFileChange }: CodeEditorProps) {
                     {/* Monaco Editor */}
                     <div className="flex-1">
                         {selectedFile ? (
-                            <MonacoEditor
-                                height="100%"
-                                language={getLanguage(selectedFile)}
-                                value={fileContent}
-                                onChange={handleFileChange}
-                                options={{
-                                    minimap: { enabled: false },
-                                    fontSize: 12,
-                                    wordWrap: 'on',
-                                    lineNumbers: 'on',
-                                    scrollBeyondLastLine: false,
-                                    automaticLayout: true,
-                                    readOnly: true,
-                                    theme: 'vs-light'
-                                }}
-                            />
+                            <>
+                                {console.log(`🎨 Rendering Monaco editor for ${selectedFile} with content length: ${fileContent.length}, loading: ${isLoadingContent}`)}
+                                {isLoadingContent ? (
+                                    <div className="text-black-60 text-sm text-center flex-1 flex items-center justify-center">
+                                        Loading file content...
+                                    </div>
+                                ) : fileContent && fileContent !== '// File not found or error loading content' && !fileContent.includes('timeout') && !fileContent.includes('Error loading') ? (
+                                    <MonacoEditor
+                                        height="100%"
+                                        language={getLanguage(selectedFile)}
+                                        value={fileContent}
+                                        onChange={handleFileChange}
+                                        options={{
+                                            minimap: { enabled: false },
+                                            fontSize: 12,
+                                            wordWrap: 'on',
+                                            lineNumbers: 'on',
+                                            scrollBeyondLastLine: false,
+                                            automaticLayout: true,
+                                            readOnly: true,
+                                            theme: 'vs-light'
+                                        }}
+                                    />
+                                ) : (
+                                    <div className="text-black-60 text-sm text-center flex-1 flex items-center justify-center">
+                                        {fileContent === '// File not found or error loading content' ? 'File not found' : 
+                                         fileContent.includes('timeout') ? 'File loading timeout - please try again' :
+                                         fileContent.includes('Error loading') ? 'Error loading file content' :
+                                         'No content available'}
+                                    </div>
+                                )}
+                            </>
                         ) : (
                             <div className="text-black-60 text-sm text-center flex-1 flex items-center justify-center">
                                 Select a file to edit
