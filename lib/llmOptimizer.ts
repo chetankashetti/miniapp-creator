@@ -2300,11 +2300,19 @@ export async function executeMultiStagePipeline(
         console.log(`  🔄 Regenerate: ${file.filename}`)
       );
 
-      // Only rewrite files if there are actually invalid files
-      if (invalidFiles.length > 0) {
-        console.log("🔄 Rewriting invalid files using LLM...");
+      // Only rewrite files if there are actually invalid files with content
+      const filesWithContent = invalidFiles.filter(f => f.content && f.content.trim().length > 0);
+      const emptyFiles = invalidFiles.filter(f => !f.content || f.content.trim().length === 0);
+      
+      if (emptyFiles.length > 0) {
+        console.warn(`⚠️ Stage 4 skipping ${emptyFiles.length} empty files: ${emptyFiles.map(f => f.filename).join(', ')}`);
+        console.warn(`⚠️ This indicates Stage 3 diff application failed - Stage 4 cannot fix empty files`);
+      }
+      
+      if (filesWithContent.length > 0) {
+        console.log(`🔄 Rewriting ${filesWithContent.length} invalid files using LLM...`);
         const rewrittenFiles = await callLLM(
-          getStage4ValidatorPrompt(invalidFiles, errors, isInitialGeneration),
+          getStage4ValidatorPrompt(filesWithContent, errors, isInitialGeneration),
           "Stage 4: Validation & Self-Debug",
           "STAGE_4_VALIDATOR"
         );
@@ -2312,10 +2320,10 @@ export async function executeMultiStagePipeline(
         // Log Stage 4 response for debugging
         if (projectId) {
           logStageResponse(projectId, 'stage4-validator', rewrittenFiles, {
-            systemPromptLength: getStage4ValidatorPrompt(invalidFiles, errors, isInitialGeneration).length,
+            systemPromptLength: getStage4ValidatorPrompt(filesWithContent, errors, isInitialGeneration).length,
             userPromptLength: 0, // Stage 4 doesn't use a user prompt
             responseTime: 0, // We don't have timing info here
-            invalidFiles: invalidFiles,
+            invalidFiles: filesWithContent,
             errors: errors
           });
         }
@@ -2337,7 +2345,7 @@ export async function executeMultiStagePipeline(
         }
 
         // Validate that Stage 4 returned the correct files
-        const expectedFilenames = new Set(invalidFiles.map((f) => f.filename));
+        const expectedFilenames = new Set(filesWithContent.map((f) => f.filename));
         const returnedFilenames = new Set(
           rewrittenFilesParsed.map((f) => f.filename)
         );
@@ -2371,7 +2379,7 @@ export async function executeMultiStagePipeline(
           console.warn(
             "⚠️ Stage 4 didn't return all expected files, keeping original files"
           );
-          const fallbackFiles = invalidFiles.filter((f) =>
+          const fallbackFiles = filesWithContent.filter((f) =>
             missingFiles.includes(f.filename)
           );
           generatedFiles = [
@@ -2403,8 +2411,8 @@ export async function executeMultiStagePipeline(
 
         console.log(`  After deduplication: ${generatedFiles.length} files`);
       } else {
-        console.log("✅ No files need rewriting - all files are valid");
-        // Keep the original generated files if no validation errors
+        console.log("✅ No files with content to rewrite - keeping all generated files");
+        console.log(`⚠️ Note: ${emptyFiles.length} empty files were skipped (Stage 3 diff application failed)`);
         generatedFiles = validFiles;
       }
     } else {
@@ -2516,9 +2524,14 @@ export async function executeMultiStagePipeline(
           // Calculate the maximum of oldLines vs newLines per hunk to avoid double counting
           const totalChanges = hunks.reduce((sum, hunk) => sum + Math.max(hunk.oldLines, hunk.newLines), 0);
           const fileLineCount = originalFile ? originalFile.content.split('\n').length : 0;
-          if (originalFile && totalChanges > fileLineCount * 0.9) {
-            console.warn(`⚠️ Diff for ${file.filename} is too large (${totalChanges} changes vs ${fileLineCount} lines, ${Math.round(totalChanges/fileLineCount*100)}%), might be a full rewrite - skipping`);
+          
+          // Only skip if the diff is truly massive (more than 150% of original file size)
+          // This allows for legitimate feature additions while preventing full rewrites
+          if (originalFile && totalChanges > fileLineCount * 1.5) {
+            console.warn(`⚠️ Diff for ${file.filename} is extremely large (${totalChanges} changes vs ${fileLineCount} lines, ${Math.round(totalChanges/fileLineCount*100)}%), might be a full rewrite - skipping`);
             return null; // Skip this diff
+          } else if (originalFile && totalChanges > fileLineCount * 0.8) {
+            console.log(`ℹ️ Large diff for ${file.filename} (${totalChanges} changes vs ${fileLineCount} lines, ${Math.round(totalChanges/fileLineCount*100)}%) - proceeding with caution`);
           }
           
         } catch (error) {
@@ -2561,10 +2574,7 @@ export async function executeMultiStagePipeline(
               });
             } catch (diffError) {
               console.error(`❌ Failed to apply diff to ${file.filename}:`, diffError);
-              // Instead of falling back to boilerplate, try to extract content from the diff
-              // or skip this file entirely to prevent boilerplate contamination
               console.warn(`⚠️ Skipping ${file.filename} due to diff application failure - this prevents boilerplate contamination`);
-              // Don't add this file to processedFiles - let it be handled by the content-based files
             }
           } else {
             // This shouldn't happen with the new filtering logic
