@@ -5,7 +5,10 @@ import dynamic from 'next/dynamic';
 import { useAuthContext } from '../contexts/AuthContext';
 
 // Monaco Editor (dynamically loaded for SSR)
-const MonacoEditor = dynamic(() => import('@monaco-editor/react'), { ssr: false });
+const MonacoEditor = dynamic(() => import('@monaco-editor/react'), { 
+  ssr: false,
+  loading: () => <div className="text-black-60 text-sm text-center flex-1 flex items-center justify-center">Loading editor...</div>
+});
 
 interface GeneratedProject {
     projectId: string;
@@ -308,10 +311,36 @@ export function CodeEditor({ currentProject, onFileChange }: CodeEditorProps) {
     const [fileContent, setFileContent] = useState<string>('');
     const [fileTree, setFileTree] = useState<FileNode[]>([]);
     const [isLoadingContent, setIsLoadingContent] = useState<boolean>(false);
+    const [monacoError, setMonacoError] = useState<boolean>(false);
     const { sessionToken } = useAuthContext();
     // const [isSaving, setIsSaving] = useState(false);
     // const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
     // const [isCollapsed, setIsCollapsed] = useState(false);
+
+    // Global error handler for Monaco Editor
+    useEffect(() => {
+        const handleError = (event: ErrorEvent) => {
+            if (event.message && event.message.includes('monaco-editor')) {
+                console.error('❌ Monaco Editor error detected:', event.message);
+                setMonacoError(true);
+            }
+        };
+
+        const handleUnhandledRejection = (event: PromiseRejectionEvent) => {
+            if (event.reason && event.reason.toString().includes('monaco-editor')) {
+                console.error('❌ Monaco Editor promise rejection:', event.reason);
+                setMonacoError(true);
+            }
+        };
+
+        window.addEventListener('error', handleError);
+        window.addEventListener('unhandledrejection', handleUnhandledRejection);
+
+        return () => {
+            window.removeEventListener('error', handleError);
+            window.removeEventListener('unhandledrejection', handleUnhandledRejection);
+        };
+    }, []);
 
     // Fetch project files when project is created
     useEffect(() => {
@@ -492,22 +521,64 @@ export function CodeEditor({ currentProject, onFileChange }: CodeEditorProps) {
                                         Loading file content...
                                     </div>
                                 ) : fileContent && fileContent !== '// File not found or error loading content' && !fileContent.includes('timeout') && !fileContent.includes('Error loading') ? (
-                                    <MonacoEditor
-                                        height="100%"
-                                        language={getLanguage(selectedFile)}
-                                        value={fileContent}
-                                        onChange={handleFileChange}
-                                        options={{
-                                            minimap: { enabled: false },
-                                            fontSize: 12,
-                                            wordWrap: 'on',
-                                            lineNumbers: 'on',
-                                            scrollBeyondLastLine: false,
-                                            automaticLayout: true,
-                                            readOnly: true,
-                                            theme: 'vs-light'
-                                        }}
-                                    />
+                                    !monacoError ? (
+                                        <MonacoEditor
+                                            height="100%"
+                                            language={getLanguage(selectedFile)}
+                                            value={fileContent}
+                                            onChange={handleFileChange}
+                                            onMount={() => {
+                                                console.log('✅ Monaco Editor mounted successfully');
+                                                setMonacoError(false);
+                                            }}
+                                            beforeMount={(monaco) => {
+                                                try {
+                                                    // Configure Monaco to work with CSP restrictions
+                                                    monaco.languages.typescript.typescriptDefaults.setCompilerOptions({
+                                                        target: monaco.languages.typescript.ScriptTarget.ES2020,
+                                                        allowNonTsExtensions: true,
+                                                        moduleResolution: monaco.languages.typescript.ModuleResolutionKind.NodeJs,
+                                                        module: monaco.languages.typescript.ModuleKind.CommonJS,
+                                                        noEmit: true,
+                                                        esModuleInterop: true,
+                                                        allowJs: true,
+                                                        typeRoots: ["node_modules/@types"]
+                                                    });
+                                                } catch (error) {
+                                                    console.error('❌ Monaco Editor configuration error:', error);
+                                                    setMonacoError(true);
+                                                }
+                                            }}
+                                            options={{
+                                                minimap: { enabled: false },
+                                                fontSize: 12,
+                                                wordWrap: 'on',
+                                                lineNumbers: 'on',
+                                                scrollBeyondLastLine: false,
+                                                automaticLayout: true,
+                                                readOnly: true,
+                                                theme: 'vs-light'
+                                            }}
+                                        />
+                                    ) : (
+                                        <div className="flex-1 flex flex-col">
+                                            <div className="text-xs text-gray-500 p-2 border-b">
+                                                Monaco Editor unavailable - using fallback editor
+                                            </div>
+                                            <textarea
+                                                value={fileContent}
+                                                onChange={(e) => handleFileChange(e.target.value)}
+                                                className="flex-1 p-4 font-mono text-sm border-0 resize-none focus:outline-none"
+                                                style={{ 
+                                                    fontFamily: 'Monaco, Menlo, "Ubuntu Mono", monospace',
+                                                    lineHeight: '1.5',
+                                                    tabSize: 2
+                                                }}
+                                                readOnly
+                                                spellCheck={false}
+                                            />
+                                        </div>
+                                    )
                                 ) : (
                                     <div className="text-black-60 text-sm text-center flex-1 flex items-center justify-center">
                                         {fileContent === '// File not found or error loading content' ? 'File not found' : 
