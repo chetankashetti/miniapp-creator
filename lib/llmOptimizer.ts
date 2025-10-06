@@ -2263,7 +2263,6 @@ export async function executeMultiStagePipeline(
           const isMissingFile = validation.missingFiles.some((f) =>
             f.includes(file.filename)
           );
-          // eslint-disable-next-line @typescript-eslint/no-unused-vars
           const isMissingClientDirective =
             clientDirectiveValidation.missingClientDirective.some(
               (m) => m.file === file.filename
@@ -2289,7 +2288,6 @@ export async function executeMultiStagePipeline(
           const isMissingFile = validation.missingFiles.some((f) =>
             f.includes(file.filename)
           );
-          // eslint-disable-next-line @typescript-eslint/no-unused-vars
           const isMissingClientDirective =
             clientDirectiveValidation.missingClientDirective.some(
               (m) => m.file === file.filename

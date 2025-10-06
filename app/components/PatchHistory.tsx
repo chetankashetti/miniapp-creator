@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
+import { useAuthContext } from '../contexts/AuthContext';
 
 interface Patch {
   id: string;
@@ -32,16 +33,28 @@ export function PatchHistory({ projectId, onPatchSelect }: PatchHistoryProps) {
   const [error, setError] = useState<string | null>(null);
   const [selectedPatchId, setSelectedPatchId] = useState<string | null>(null);
   const [expandedPatchId, setExpandedPatchId] = useState<string | null>(null);
+  const { sessionToken } = useAuthContext();
 
   const fetchPatches = useCallback(async () => {
+    if (!sessionToken) {
+      setError('Authentication required');
+      setLoading(false);
+      return;
+    }
+
     try {
       setLoading(true);
       setError(null);
 
-      const response = await fetch(`/api/projects/${projectId}/patches`);
+      const response = await fetch(`/api/projects/${projectId}/patches`, {
+        headers: {
+          'Authorization': `Bearer ${sessionToken}`,
+          'Content-Type': 'application/json',
+        },
+      });
 
       if (!response.ok) {
-        throw new Error('Failed to fetch patches');
+        throw new Error(`Failed to fetch patches: ${response.status} ${response.statusText}`);
       }
 
       const data = await response.json();
@@ -52,7 +65,7 @@ export function PatchHistory({ projectId, onPatchSelect }: PatchHistoryProps) {
     } finally {
       setLoading(false);
     }
-  }, [projectId]);
+  }, [projectId, sessionToken]);
 
   useEffect(() => {
     if (projectId) {
@@ -61,15 +74,23 @@ export function PatchHistory({ projectId, onPatchSelect }: PatchHistoryProps) {
   }, [projectId, fetchPatches]);
 
   const handleRevertPatch = async (patchId: string) => {
+    if (!sessionToken) {
+      alert('Authentication required');
+      return;
+    }
+
     try {
       const response = await fetch(`/api/projects/${projectId}/patches`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${sessionToken}`,
+        },
         body: JSON.stringify({ patchId, action: 'revert' }),
       });
 
       if (!response.ok) {
-        throw new Error('Failed to revert patch');
+        throw new Error(`Failed to revert patch: ${response.status} ${response.statusText}`);
       }
 
       // Refresh patches

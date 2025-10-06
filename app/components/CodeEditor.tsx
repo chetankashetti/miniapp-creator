@@ -295,23 +295,34 @@ export function CodeEditor({ currentProject, onFileChange }: CodeEditorProps) {
     // Fetch project files when project is created
     useEffect(() => {
         if (currentProject && sessionToken) {
+            console.log(`🔍 Loading project files for project: ${currentProject.projectId}`);
             // Try database first, then fallback to file system
             fetchProjectFilesFromDB(currentProject.projectId, sessionToken).then(files => {
+                console.log(`📁 Database files found:`, files);
                 if (files.length > 0) {
                     setFileTree(createFileTree(files));
                     // Set first available file as selected
                     const firstFile = files.find(f => f.includes('page.tsx')) || files[0];
+                    console.log(`📄 Setting first file as selected: ${firstFile}`);
                     setSelectedFile(firstFile);
                 } else {
+                    console.log(`⚠️ No files found in database, trying file system for project: ${currentProject.projectId}`);
                     // Fallback to file system
                     fetchProjectFiles(currentProject.projectId, sessionToken).then(files => {
+                        console.log(`📁 File system files found:`, files);
                         setFileTree(createFileTree(files));
                         if (files.length > 0) {
                             const firstFile = files.find(f => f.includes('page.tsx')) || files[0];
+                            console.log(`📄 Setting first file as selected: ${firstFile}`);
                             setSelectedFile(firstFile);
                         }
                     });
                 }
+            });
+        } else {
+            console.log(`⚠️ Missing requirements for file tree loading:`, {
+                hasProject: !!currentProject,
+                hasSessionToken: !!sessionToken
             });
         }
     }, [currentProject, sessionToken]);
@@ -319,14 +330,26 @@ export function CodeEditor({ currentProject, onFileChange }: CodeEditorProps) {
     // Fetch file content when selected file changes
     useEffect(() => {
         if (currentProject && selectedFile && sessionToken) {
+            console.log(`🔍 Loading file content for: ${selectedFile} in project: ${currentProject.projectId}`);
             // Try database first, then fallback to file system
             fetchFileContentFromDB(selectedFile, currentProject.projectId, sessionToken).then(content => {
+                console.log(`📄 Database content for ${selectedFile}:`, content.substring(0, 100) + '...');
                 if (content !== '// File not found or error loading content') {
                     setFileContent(content);
                 } else {
+                    console.log(`⚠️ File not found in database, trying file system for: ${selectedFile}`);
                     // Fallback to file system
-                    fetchFileContent(selectedFile, currentProject.projectId, sessionToken).then(setFileContent);
+                    fetchFileContent(selectedFile, currentProject.projectId, sessionToken).then(fileSystemContent => {
+                        console.log(`📄 File system content for ${selectedFile}:`, fileSystemContent.substring(0, 100) + '...');
+                        setFileContent(fileSystemContent);
+                    });
                 }
+            });
+        } else {
+            console.log(`⚠️ Missing requirements for file loading:`, {
+                hasProject: !!currentProject,
+                hasSelectedFile: !!selectedFile,
+                hasSessionToken: !!sessionToken
             });
         }
     }, [selectedFile, currentProject, sessionToken]);
