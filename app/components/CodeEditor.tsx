@@ -313,6 +313,7 @@ export function CodeEditor({ currentProject, onFileChange }: CodeEditorProps) {
     const [isLoadingContent, setIsLoadingContent] = useState<boolean>(false);
     const [monacoError, setMonacoError] = useState<boolean>(false);
     const [monacoLoadTimeout, setMonacoLoadTimeout] = useState<NodeJS.Timeout | null>(null);
+    const [monacoRetryCount, setMonacoRetryCount] = useState<number>(0);
     const { sessionToken } = useAuthContext();
     // const [isSaving, setIsSaving] = useState(false);
     // const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
@@ -365,14 +366,14 @@ export function CodeEditor({ currentProject, onFileChange }: CodeEditorProps) {
         };
     }, []);
 
-    // Monaco Editor load timeout - if Monaco doesn't load within 5 seconds, show fallback
+    // Monaco Editor load timeout - if Monaco doesn't load within 3 seconds, show fallback
     useEffect(() => {
         if (selectedFile && fileContent && !monacoError) {
             console.log('⏰ Starting Monaco load timeout for file:', selectedFile);
             const timeout = setTimeout(() => {
                 console.log('⏰ Monaco Editor load timeout - switching to fallback');
                 setMonacoError(true);
-            }, 5000); // 5 second timeout
+            }, 3000); // 3 second timeout (reduced from 5s for faster fallback)
             
             setMonacoLoadTimeout(timeout);
             
@@ -610,21 +611,37 @@ export function CodeEditor({ currentProject, onFileChange }: CodeEditorProps) {
                                         />
                                     ) : (
                                         <div className="flex-1 flex flex-col">
-                                            <div className="text-xs text-gray-500 p-2 border-b">
-                                                Monaco Editor unavailable - using fallback editor
+                                            <div className="text-xs text-gray-500 p-2 border-b bg-yellow-50 flex items-center justify-between">
+                                                <span>⚠️ Monaco Editor unavailable - using fallback editor</span>
+                                                {monacoRetryCount < 2 && (
+                                                    <button
+                                                        onClick={() => {
+                                                            console.log('🔄 Retrying Monaco Editor...');
+                                                            setMonacoError(false);
+                                                            setMonacoRetryCount(prev => prev + 1);
+                                                        }}
+                                                        className="text-xs bg-blue-500 text-white px-2 py-1 rounded hover:bg-blue-600"
+                                                    >
+                                                        Retry Monaco
+                                                    </button>
+                                                )}
                                             </div>
-                                            <textarea
-                                                value={fileContent}
-                                                onChange={(e) => handleFileChange(e.target.value)}
-                                                className="flex-1 p-4 font-mono text-sm border-0 resize-none focus:outline-none"
-                                                style={{ 
-                                                    fontFamily: 'Monaco, Menlo, "Ubuntu Mono", monospace',
-                                                    lineHeight: '1.5',
-                                                    tabSize: 2
-                                                }}
-                                                readOnly
-                                                spellCheck={false}
-                                            />
+                                            <div className="flex-1 relative">
+                                                <textarea
+                                                    value={fileContent}
+                                                    onChange={(e) => handleFileChange(e.target.value)}
+                                                    className="w-full h-full p-4 font-mono text-sm border-0 resize-none focus:outline-none bg-white"
+                                                    style={{ 
+                                                        fontFamily: 'Monaco, Menlo, "Ubuntu Mono", monospace',
+                                                        lineHeight: '1.5',
+                                                        tabSize: 2,
+                                                        minHeight: '100%'
+                                                    }}
+                                                    readOnly
+                                                    spellCheck={false}
+                                                    placeholder="File content will appear here..."
+                                                />
+                                            </div>
                                         </div>
                                     )
                                 ) : (

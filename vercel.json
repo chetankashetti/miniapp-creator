@@ -23,7 +23,7 @@
         },
         {
           "key": "Content-Security-Policy",
-          "value": "frame-ancestors *; script-src 'self' 'unsafe-eval' 'unsafe-inline' data: blob:;"
+          "value": "frame-ancestors *; script-src 'self' 'unsafe-eval' 'unsafe-inline' data: blob: https://cdn.jsdelivr.net; connect-src 'self' https://cdn.jsdelivr.net;"
         }
       ]
     }
