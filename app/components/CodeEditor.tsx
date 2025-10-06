@@ -311,7 +311,7 @@ export function CodeEditor({ currentProject, onFileChange }: CodeEditorProps) {
     const [fileContent, setFileContent] = useState<string>('');
     const [fileTree, setFileTree] = useState<FileNode[]>([]);
     const [isLoadingContent, setIsLoadingContent] = useState<boolean>(false);
-    const [monacoError, setMonacoError] = useState<boolean>(false);
+    const [monacoError, setMonacoError] = useState<boolean>(process.env.NODE_ENV === 'production');
     const [monacoLoadTimeout, setMonacoLoadTimeout] = useState<NodeJS.Timeout | null>(null);
     const [monacoRetryCount, setMonacoRetryCount] = useState<number>(0);
     const { sessionToken } = useAuthContext();
@@ -366,14 +366,14 @@ export function CodeEditor({ currentProject, onFileChange }: CodeEditorProps) {
         };
     }, []);
 
-    // Monaco Editor load timeout - if Monaco doesn't load within 3 seconds, show fallback
+    // Monaco Editor load timeout - if Monaco doesn't load within 2 seconds, show fallback
     useEffect(() => {
         if (selectedFile && fileContent && !monacoError) {
             console.log('⏰ Starting Monaco load timeout for file:', selectedFile);
             const timeout = setTimeout(() => {
                 console.log('⏰ Monaco Editor load timeout - switching to fallback');
                 setMonacoError(true);
-            }, 3000); // 3 second timeout (reduced from 5s for faster fallback)
+            }, 2000); // 2 second timeout (reduced for faster fallback)
             
             setMonacoLoadTimeout(timeout);
             
@@ -385,6 +385,26 @@ export function CodeEditor({ currentProject, onFileChange }: CodeEditorProps) {
             };
         }
     }, [selectedFile, fileContent, monacoError]);
+
+    // Force fallback in production if Monaco fails to load after 1 second
+    useEffect(() => {
+        if (selectedFile && fileContent && !monacoError && process.env.NODE_ENV === 'production') {
+            console.log('🚀 Production mode - setting aggressive Monaco fallback');
+            const timeout = setTimeout(() => {
+                console.log('🚀 Production fallback triggered - Monaco taking too long');
+                setMonacoError(true);
+            }, 1000); // 1 second timeout in production
+            
+            return () => clearTimeout(timeout);
+        }
+    }, [selectedFile, fileContent, monacoError]);
+
+    // Debug logging for fallback editor
+    useEffect(() => {
+        if (monacoError && fileContent) {
+            console.log(`📝 Fallback editor active - fileContent length: ${fileContent?.length || 0}, content preview: ${fileContent?.substring(0, 100) || 'empty'}...`);
+        }
+    }, [monacoError, fileContent]);
 
     // Fetch project files when project is created
     useEffect(() => {
@@ -565,7 +585,7 @@ export function CodeEditor({ currentProject, onFileChange }: CodeEditorProps) {
                                         Loading file content...
                                     </div>
                                 ) : fileContent && fileContent !== '// File not found or error loading content' && !fileContent.includes('timeout') && !fileContent.includes('Error loading') ? (
-                                    !monacoError ? (
+                                    !monacoError && process.env.NODE_ENV !== 'production' ? (
                                         <MonacoEditor
                                             height="100%"
                                             language={getLanguage(selectedFile)}
@@ -612,7 +632,7 @@ export function CodeEditor({ currentProject, onFileChange }: CodeEditorProps) {
                                     ) : (
                                         <div className="flex-1 flex flex-col">
                                             <div className="text-xs text-gray-500 p-2 border-b bg-yellow-50 flex items-center justify-between">
-                                                <span>⚠️ Monaco Editor unavailable - using fallback editor</span>
+                                                <span>{process.env.NODE_ENV === 'production' ? '📝 Using text editor (Monaco disabled in production)' : '⚠️ Monaco Editor unavailable - using fallback editor'}</span>
                                                 {monacoRetryCount < 2 && (
                                                     <button
                                                         onClick={() => {
@@ -628,7 +648,7 @@ export function CodeEditor({ currentProject, onFileChange }: CodeEditorProps) {
                                             </div>
                                             <div className="flex-1 relative">
                                                 <textarea
-                                                    value={fileContent}
+                                                    value={fileContent || ''}
                                                     onChange={(e) => handleFileChange(e.target.value)}
                                                     className="w-full h-full p-4 font-mono text-sm border-0 resize-none focus:outline-none bg-white"
                                                     style={{ 
