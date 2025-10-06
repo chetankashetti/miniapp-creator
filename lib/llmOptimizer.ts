@@ -950,6 +950,13 @@ DIFF-BASED APPROACH:
 - For new files, generate complete file content
 - Validate that diffs are minimal and precise
 
+CRITICAL: 'use client' DIRECTIVE IN DIFFS:
+- The 'use client' directive is ALREADY present in the original file
+- DO NOT include 'use client' in your unified diff - it's already there
+- Account for the 'use client' line when calculating line numbers
+- If the original file starts with 'use client', your diff should start from line 2 (after the directive)
+- Example: If you see "import { ... }" in the current file, it's actually line 2, not line 1
+
 CRITICAL LINE NUMBER CALCULATION:
 - ALWAYS calculate line numbers based on the ACTUAL current file content provided above
 - Count lines in the current file to determine correct oldStart, oldLines, newStart, newLines
