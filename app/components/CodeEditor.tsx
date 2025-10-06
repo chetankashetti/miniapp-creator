@@ -312,6 +312,7 @@ export function CodeEditor({ currentProject, onFileChange }: CodeEditorProps) {
     const [fileTree, setFileTree] = useState<FileNode[]>([]);
     const [isLoadingContent, setIsLoadingContent] = useState<boolean>(false);
     const [monacoError, setMonacoError] = useState<boolean>(false);
+    const [monacoLoadTimeout, setMonacoLoadTimeout] = useState<NodeJS.Timeout | null>(null);
     const { sessionToken } = useAuthContext();
     // const [isSaving, setIsSaving] = useState(false);
     // const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
@@ -320,27 +321,69 @@ export function CodeEditor({ currentProject, onFileChange }: CodeEditorProps) {
     // Global error handler for Monaco Editor
     useEffect(() => {
         const handleError = (event: ErrorEvent) => {
-            if (event.message && event.message.includes('monaco-editor')) {
+            console.log('🔍 Global error detected:', event.message, event.filename);
+            if (event.message && (
+                event.message.includes('monaco-editor') || 
+                event.message.includes('Monaco') ||
+                event.message.includes('Monaco initialization') ||
+                event.filename?.includes('monaco-editor')
+            )) {
                 console.error('❌ Monaco Editor error detected:', event.message);
                 setMonacoError(true);
             }
         };
 
         const handleUnhandledRejection = (event: PromiseRejectionEvent) => {
-            if (event.reason && event.reason.toString().includes('monaco-editor')) {
+            console.log('🔍 Unhandled promise rejection:', event.reason);
+            if (event.reason && (
+                event.reason.toString().includes('monaco-editor') ||
+                event.reason.toString().includes('Monaco') ||
+                event.reason.toString().includes('Monaco initialization')
+            )) {
                 console.error('❌ Monaco Editor promise rejection:', event.reason);
+                setMonacoError(true);
+            }
+        };
+
+        // Also listen for script loading errors
+        const handleScriptError = (event: Event) => {
+            const target = event.target as HTMLScriptElement;
+            if (target && target.src && target.src.includes('monaco-editor')) {
+                console.log('❌ Monaco Editor script loading error detected');
                 setMonacoError(true);
             }
         };
 
         window.addEventListener('error', handleError);
         window.addEventListener('unhandledrejection', handleUnhandledRejection);
+        document.addEventListener('error', handleScriptError, true);
 
         return () => {
             window.removeEventListener('error', handleError);
             window.removeEventListener('unhandledrejection', handleUnhandledRejection);
+            document.removeEventListener('error', handleScriptError, true);
         };
     }, []);
+
+    // Monaco Editor load timeout - if Monaco doesn't load within 5 seconds, show fallback
+    useEffect(() => {
+        if (selectedFile && fileContent && !monacoError) {
+            console.log('⏰ Starting Monaco load timeout for file:', selectedFile);
+            const timeout = setTimeout(() => {
+                console.log('⏰ Monaco Editor load timeout - switching to fallback');
+                setMonacoError(true);
+            }, 5000); // 5 second timeout
+            
+            setMonacoLoadTimeout(timeout);
+            
+            return () => {
+                if (timeout) {
+                    clearTimeout(timeout);
+                    setMonacoLoadTimeout(null);
+                }
+            };
+        }
+    }, [selectedFile, fileContent, monacoError]);
 
     // Fetch project files when project is created
     useEffect(() => {
@@ -530,6 +573,11 @@ export function CodeEditor({ currentProject, onFileChange }: CodeEditorProps) {
                                             onMount={() => {
                                                 console.log('✅ Monaco Editor mounted successfully');
                                                 setMonacoError(false);
+                                                // Clear the timeout since Monaco loaded successfully
+                                                if (monacoLoadTimeout) {
+                                                    clearTimeout(monacoLoadTimeout);
+                                                    setMonacoLoadTimeout(null);
+                                                }
                                             }}
                                             beforeMount={(monaco) => {
                                                 try {
