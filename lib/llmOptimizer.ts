@@ -839,7 +839,7 @@ Nothing else before/after the markers. Do not include any explanatory text, comm
 
 JSON FORMATTING:
 - Escape quotes as \\\", newlines as \\n, backslashes as \\\\
-- Example: "content": "import { useState } from \\\"react\\\";\\n\\nconst Component = () => {\\n  return <div>Hello</div>;\\n};"
+- Example: "content": "'use client';\\n\\nimport { useState } from \\\"react\\\";\\n\\nconst Component = () => {\\n  const [state, setState] = useState();\\n  return <div>Hello</div>;\\n};"
 
 CODE GENERATION RULES:
 - Generate complete file contents based on patch plan descriptions
@@ -848,6 +848,32 @@ CODE GENERATION RULES:
 - Follow patch plan fields exactly (purpose, description, location, dependencies)
 - Include all required imports and implement contract interactions when specified
 - Prefer neutral colors with subtle accents, ensure good contrast and accessibility
+
+CLIENT DIRECTIVE REQUIREMENTS (CRITICAL - BUILD WILL FAIL IF MISSING):
+🚨 MANDATORY: Every React component file MUST start with 'use client'; directive
+🚨 MANDATORY: This is the FIRST line of EVERY file that uses React features
+🚨 MANDATORY: Without this directive, the build will fail with hydration errors
+
+REQUIRED FILES:
+- src/app/page.tsx (ALWAYS needs 'use client')
+- src/components/*.tsx (ALL component files)
+- src/components/ui/*.tsx (ALL UI component files)
+- ANY file with React hooks: useState, useEffect, useCallback, useMemo, useRef, useContext, useReducer
+- ANY file with event handlers: onClick, onChange, onSubmit, onFocus, onBlur, onKeyDown, onKeyUp
+- ANY file with interactive JSX components
+
+EXACT PATTERN REQUIRED:
+'use client';
+
+import { useState } from 'react';
+// ... rest of component
+
+CRITICAL VALIDATION:
+- First line MUST be exactly: 'use client';
+- NO quotes around the directive
+- NO variations like "use client" or 'use client' without semicolon
+- MUST be the very first line of the file
+- NO empty lines before the directive
 
 FARCASTER AUTHENTICATION (CRITICAL - MUST PRESERVE):
 - ALWAYS import and keep ConnectWallet: import { ConnectWallet } from '@/components/wallet/ConnectWallet';
@@ -893,6 +919,9 @@ ESLINT COMPLIANCE (CRITICAL - BUILD WILL FAIL IF VIOLATED):
 - React Hook dependencies: Include ALL values from component scope (props, state, context) that are used inside the callback
 - NEVER use empty interfaces: export interface Props extends BaseProps {} → export type Props = BaseProps;
 BLOCKCHAIN: Use pre-vetted templates (ERC20Template.sol, ERC721Template.sol, EscrowTemplate.sol), modify contracts/scripts/deploy.js, include ABI placeholders
+- 🚨 CLIENT DIRECTIVE: ALWAYS start React component files with 'use client'; directive (CRITICAL - MISSING THIS CAUSES BUILD FAILURE)
+- 🚨 CLIENT DIRECTIVE: This MUST be the first line of EVERY React component file
+- 🚨 CLIENT DIRECTIVE: Pattern: 'use client'; (exactly this format, no variations)
 - Return valid JSON array only - NO EXPLANATIONS, NO TEXT, ONLY JSON
 
 REMEMBER: Return ONLY the JSON array above surrounded by __START_JSON__ and __END_JSON__ markers. No other text, no explanations, no markdown formatting.
@@ -997,6 +1026,32 @@ CODE GENERATION RULES:
 - Preserve existing code structure when modifying files
 - Prefer neutral colors with subtle accents, ensure good contrast and accessibility
 
+CLIENT DIRECTIVE REQUIREMENTS (CRITICAL - BUILD WILL FAIL IF MISSING):
+🚨 MANDATORY: Every React component file MUST start with 'use client'; directive
+🚨 MANDATORY: This is the FIRST line of EVERY file that uses React features
+🚨 MANDATORY: Without this directive, the build will fail with hydration errors
+
+REQUIRED FILES:
+- src/app/page.tsx (ALWAYS needs 'use client')
+- src/components/*.tsx (ALL component files)
+- src/components/ui/*.tsx (ALL UI component files)
+- ANY file with React hooks: useState, useEffect, useCallback, useMemo, useRef, useContext, useReducer
+- ANY file with event handlers: onClick, onChange, onSubmit, onFocus, onBlur, onKeyDown, onKeyUp
+- ANY file with interactive JSX components
+
+EXACT PATTERN REQUIRED:
+'use client';
+
+import { useState } from 'react';
+// ... rest of component
+
+CRITICAL VALIDATION:
+- First line MUST be exactly: 'use client';
+- NO quotes around the directive
+- NO variations like "use client" or 'use client' without semicolon
+- MUST be the very first line of the file
+- NO empty lines before the directive
+
 FARCASTER AUTHENTICATION (CRITICAL - MUST PRESERVE):
 - ALWAYS import and keep ConnectWallet: import { ConnectWallet } from '@/components/wallet/ConnectWallet';
 - ALWAYS render ConnectWallet for non-miniapp users: {!isMiniApp && <ConnectWallet />}
@@ -1043,6 +1098,9 @@ ESLINT COMPLIANCE (CRITICAL - BUILD WILL FAIL IF VIOLATED):
 - React Hook dependencies: Include ALL values from component scope (props, state, context) that are used inside the callback
 - NEVER use empty interfaces: export interface Props extends BaseProps {} → export type Props = BaseProps;
 BLOCKCHAIN: Use pre-vetted templates (ERC20Template.sol, ERC721Template.sol, EscrowTemplate.sol), modify contracts/scripts/deploy.js, include ABI placeholders
+- 🚨 CLIENT DIRECTIVE: ALWAYS start React component files with 'use client'; directive (CRITICAL - MISSING THIS CAUSES BUILD FAILURE)
+- 🚨 CLIENT DIRECTIVE: This MUST be the first line of EVERY React component file
+- 🚨 CLIENT DIRECTIVE: Pattern: 'use client'; (exactly this format, no variations)
 - Return valid JSON array only - NO EXPLANATIONS, NO TEXT, ONLY JSON
 
 REMEMBER: Return ONLY the JSON array above surrounded by __START_JSON__ and __END_JSON__ markers. No other text, no explanations, no markdown formatting.
@@ -1373,12 +1431,12 @@ function validateClientDirectives(
         .join('\n');
       
       // If the diff contains client-side features, we need to check if 'use client' is present
-      const usesClientHooks = /useState|useEffect/.test(addedLines);
-      const usesEventHandlers = /onClick|onChange/.test(addedLines);
+      const usesClientHooks = /useState|useEffect|useCallback|useMemo|useRef|useContext/.test(addedLines);
+      const usesEventHandlers = /onClick|onChange|onSubmit|onFocus|onBlur|onKeyDown|onKeyUp/.test(addedLines);
       
       if (usesClientHooks || usesEventHandlers) {
-        // Check if the diff includes 'use client' directive
-        const hasClientDirectiveInDiff = /^"use client"/m.test(addedLines);
+        // Check if the diff includes 'use client' directive - FIXED REGEX
+        const hasClientDirectiveInDiff = /^'use client';?/m.test(addedLines);
         
         if (!hasClientDirectiveInDiff) {
           missingClientDirective.push({
@@ -1394,13 +1452,16 @@ function validateClientDirectives(
     
     if (!contentToAnalyze) return; // Skip if no content to analyze
     
-    // Only check for critical client-side features that definitely need 'use client'
-    const usesClientHooks = /useState|useEffect/.test(contentToAnalyze);
-    const usesEventHandlers = /onClick|onChange/.test(contentToAnalyze);
-    const hasClientDirective = /"use client"/.test(contentToAnalyze);
+    // Check for critical client-side features that definitely need 'use client' - EXPANDED PATTERNS
+    const usesClientHooks = /useState|useEffect|useCallback|useMemo|useRef|useContext|useReducer|useLayoutEffect/.test(contentToAnalyze);
+    const usesEventHandlers = /onClick|onChange|onSubmit|onFocus|onBlur|onKeyDown|onKeyUp|onMouseEnter|onMouseLeave/.test(contentToAnalyze);
+    const hasJSX = /<[A-Z][a-zA-Z]*\s*[^>]*>/g.test(contentToAnalyze);
+    
+    // FIXED REGEX - Look for the actual directive format
+    const hasClientDirective = /^'use client';?/m.test(contentToAnalyze);
 
     // Only flag if it's clearly a client component
-    if ((usesClientHooks || usesEventHandlers) && !hasClientDirective) {
+    if ((usesClientHooks || usesEventHandlers || hasJSX) && !hasClientDirective) {
       missingClientDirective.push({
         file: file.filename,
         reason: "Uses client-side features but missing 'use client' directive",
