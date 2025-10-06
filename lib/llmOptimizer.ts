@@ -2227,8 +2227,9 @@ export async function executeMultiStagePipeline(
         // Only keep files that don't have critical compilation errors
         // Missing imports might be false positives for diff files, so be more conservative
         const hasCriticalError = isMissingFile || 
-                                (hasTypeScriptError && !file.unifiedDiff) || // Only flag TypeScript errors for non-diff files
-                                (hasReactError && !file.unifiedDiff); // Only flag React errors for non-diff files
+                                isMissingClientDirective || // Always flag missing 'use client' directive
+                                hasTypeScriptError || // Always flag TypeScript errors
+                                hasReactError; // Always flag React errors
         
         return !hasCriticalError;
       });
@@ -2251,8 +2252,9 @@ export async function executeMultiStagePipeline(
 
         // Only mark as invalid if there are critical compilation errors
         const hasCriticalError = isMissingFile || 
-                                (hasTypeScriptError && !file.unifiedDiff) || // Only flag TypeScript errors for non-diff files
-                                (hasReactError && !file.unifiedDiff); // Only flag React errors for non-diff files
+                                isMissingClientDirective || // Always flag missing 'use client' directive
+                                hasTypeScriptError || // Always flag TypeScript errors
+                                hasReactError; // Always flag React errors
         
         return hasCriticalError;
       }).map(file => ({

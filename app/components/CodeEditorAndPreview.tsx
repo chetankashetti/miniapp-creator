@@ -51,6 +51,7 @@ export function CodeEditorAndPreview({
     const [viewMode, setViewMode] = useState<ViewMode>(currentProject ? 'code' : 'preview');
     const [showLogs, setShowLogs] = useState(false);
     const [showPublishModal, setShowPublishModal] = useState(false);
+    const [copySuccess, setCopySuccess] = useState(false);
 
     // Update view mode when currentProject changes
     useEffect(() => {
@@ -93,6 +94,43 @@ export function CodeEditorAndPreview({
             return 'Preview';
         case 'history':
             return 'History';
+        }
+    };
+
+    const handleCopyUrl = async () => {
+        if (!currentProject?.url) return;
+        
+        try {
+            // Try modern clipboard API first
+            if (navigator.clipboard && window.isSecureContext) {
+                await navigator.clipboard.writeText(currentProject.url);
+                setCopySuccess(true);
+                setTimeout(() => setCopySuccess(false), 2000);
+            } else {
+                // Fallback for older browsers or non-secure contexts
+                const textArea = document.createElement('textarea');
+                textArea.value = currentProject.url;
+                textArea.style.position = 'fixed';
+                textArea.style.left = '-999999px';
+                textArea.style.top = '-999999px';
+                document.body.appendChild(textArea);
+                textArea.focus();
+                textArea.select();
+                
+                const successful = document.execCommand('copy');
+                document.body.removeChild(textArea);
+                
+                if (successful) {
+                    setCopySuccess(true);
+                    setTimeout(() => setCopySuccess(false), 2000);
+                } else {
+                    throw new Error('Copy command failed');
+                }
+            }
+        } catch (error) {
+            console.error('Failed to copy URL:', error);
+            // You could show a toast notification here if you have one
+            alert('Failed to copy URL. Please copy manually: ' + currentProject.url);
         }
     };
 
@@ -150,20 +188,32 @@ export function CodeEditorAndPreview({
                     <div className="flex items-center gap-3">
                         <div className="flex flex-col">
                             <div className="text-xs text-black-60 font-medium">Project URL</div>
-                            <div className="text-xs text-black font-mono">
+                            <button 
+                                onClick={() => window.open(currentProject.url, '_blank')}
+                                className="text-xs text-black font-mono max-w-[300px] truncate text-left hover:text-blue-600 transition-colors" 
+                                title={`Click to open: ${currentProject.url}`}
+                            >
                                 {currentProject.url}
-                            </div>
+                            </button>
                         </div>
                         <button
-                            onClick={() => {
-                                navigator.clipboard.writeText(currentProject.url);
-                            }}
-                            className="p-2 bg-black text-white rounded hover:bg-black-80 transition-colors"
-                            title="Copy URL"
+                            onClick={handleCopyUrl}
+                            className={`p-2 rounded transition-colors ${
+                                copySuccess 
+                                    ? 'bg-green-600 text-white' 
+                                    : 'bg-black text-white hover:bg-black-80'
+                            }`}
+                            title={copySuccess ? "Copied!" : "Copy URL"}
                         >
-                            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                            </svg>
+                            {copySuccess ? (
+                                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                                </svg>
+                            ) : (
+                                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                                </svg>
+                            )}
                         </button>
                         <button
                             onClick={() => window.open(currentProject.url, '_blank')}
