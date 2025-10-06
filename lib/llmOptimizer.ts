@@ -1139,7 +1139,7 @@ ${errors.join("\n")}
 FILES TO REGENERATE:
 ${generatedFiles.map((f) => `---${f.filename}---\n${f.content}`).join("\n\n")}
 
-TASK: Fix critical errors that would prevent the project from running. ${isInitialGeneration ? 'Generate complete corrected files for initial project generation.' : 'Generate unified diff patches for surgical fixes rather than rewriting entire files.'}
+TASK: Fix critical errors that would prevent the project from running. ${isInitialGeneration ? 'Generate complete corrected files for initial project generation.' : 'Generate unified diff patches for surgical fixes rather than rewriting entire files. PRESERVE the existing implementation from Stage 3 - only fix the specific validation errors mentioned.'}
 
 BOILERPLATE CONTEXT:
 ${JSON.stringify(FARCASTER_BOILERPLATE_CONTEXT, null, 2)}
@@ -1181,7 +1181,12 @@ __START_JSON__
 __END_JSON__
 `}
 
-CRITICAL FIXES ONLY:
+CRITICAL FIXES ONLY - PRESERVE EXISTING IMPLEMENTATIONS:
+
+🚨 CRITICAL: DO NOT rewrite entire components or functions
+🚨 CRITICAL: Only fix the specific validation errors mentioned above
+🚨 CRITICAL: Preserve all existing functionality and UI implementations
+🚨 CRITICAL: If Stage 3 had a sophisticated implementation, keep it - don't simplify
 
 1. SYNTAX ERRORS:
    - Fix missing semicolons, brackets, parentheses
@@ -1208,6 +1213,24 @@ CRITICAL FIXES ONLY:
    - Remove any unused imported modules
    - Replace Array.from() with for loops when calling hooks
    - Escape apostrophes (&apos;), quotes (&quot;), and ampersands (&amp;) in JSX
+
+PRESERVATION RULES:
+- If the original file had a Button component with Check icon, keep it
+- If the original file had sophisticated styling, keep it
+- If the original file had proper accessibility attributes, keep them
+- Only add 'use client' directive if missing
+- Only fix syntax errors, don't change the implementation approach
+
+EXAMPLE - WHAT NOT TO DO:
+❌ WRONG: Replace sophisticated Button+Check implementation with basic HTML checkbox
+❌ WRONG: Simplify complex conditional styling to basic classes
+❌ WRONG: Remove accessibility attributes or proper event handlers
+
+EXAMPLE - WHAT TO DO:
+✅ CORRECT: Add 'use client'; at the top if missing
+✅ CORRECT: Fix unescaped quotes: 'text' → &apos;text&apos;
+✅ CORRECT: Fix missing semicolons or brackets
+✅ CORRECT: Keep all existing UI implementations exactly as they are
 
 RULES:
 - Return EXACTLY the same filenames provided
