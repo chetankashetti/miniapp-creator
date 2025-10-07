@@ -193,6 +193,37 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Add exponential backoff retry logic for Claude API calls
+    const maxRetries = 5; // Increased retries
+    const baseDelay = 1000; // 1 second base delay
+    
+    async function retryClaudeCall(systemPrompt: string, message: string, stream: boolean) {
+      let lastError;
+      
+      for (let i = 0; i < maxRetries; i++) {
+        try {
+          return await callClaude(systemPrompt, message, stream);
+        } catch (error) {
+          lastError = error;
+          
+          // Check if error is due to overload
+          if (error instanceof Error && error.message.includes('overloaded_error')) {
+            const exponentialDelay = baseDelay * Math.pow(2, i); // Exponential backoff
+            const jitter = Math.random() * 1000; // Add random jitter up to 1 second
+            const totalDelay = exponentialDelay + jitter;
+            
+            console.log(`Claude API overloaded, retry attempt ${i + 1} of ${maxRetries}. Waiting ${totalDelay}ms`);
+            await new Promise(resolve => setTimeout(resolve, totalDelay));
+            continue;
+          }
+          
+          throw error; // Throw non-overload errors immediately
+        }
+      }
+      
+      throw new Error(`Failed after ${maxRetries} retries: ${lastError}`);
+    }
+
     // Determine the project ID to use
     let currentProjectId = projectId;
     
@@ -260,11 +291,7 @@ export async function POST(request: NextRequest) {
               conversationHistory
             );
 
-      const streamResponse = (await callClaude(
-        systemPrompt,
-        message,
-        true
-      )) as ReadableStream;
+      const streamResponse = await retryClaudeCall(systemPrompt, message, true) as ReadableStream;
 
       if (action === "confirm_project") {
         session.projectConfirmed = true;
@@ -299,7 +326,7 @@ export async function POST(request: NextRequest) {
           "{requirements}",
           requirements
         );
-        aiResponse = (await callClaude(systemPrompt, message)) as string;
+        aiResponse = await retryClaudeCall(systemPrompt, message, false) as string;
         session.projectConfirmed = true;
       } else {
         const conversationHistory = session.messages
@@ -309,7 +336,7 @@ export async function POST(request: NextRequest) {
           "{conversationHistory}",
           conversationHistory
         );
-        aiResponse = (await callClaude(systemPrompt, message)) as string;
+        aiResponse = await retryClaudeCall(systemPrompt, message, false) as string;
       }
 
       // Save AI message to database and update cache
