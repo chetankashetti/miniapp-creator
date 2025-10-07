@@ -48,6 +48,7 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
     const [chatSessionId, setChatSessionId] = useState<string>('');
     const [chatProjectId, setChatProjectId] = useState<string>(''); // Track the actual project ID where chat messages are stored
     const [currentPhase, setCurrentPhase] = useState<'requirements' | 'building' | 'editing'>('requirements');
+    const [hasTriggeredGeneration, setHasTriggeredGeneration] = useState(false); // Prevent duplicate generation calls
 
     // Function to scroll to bottom of chat
     const scrollToBottom = () => {
@@ -60,6 +61,7 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
     useEffect(() => {
         if (!chatSessionId) {
             setChatSessionId(crypto.randomUUID());
+            setHasTriggeredGeneration(false); // Reset generation flag for new session
         }
     }, [chatSessionId]);
 
@@ -283,7 +285,7 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
             // AI message will be saved to database by the chat API
 
             // Check if we should transition to building phase
-            if (currentPhase === 'requirements') {
+            if (currentPhase === 'requirements' && !hasTriggeredGeneration) {
                 const aiResponseLower = aiResponse.toLowerCase();
                 const isConfirmedByText = aiResponseLower.includes('proceed to build') ||
                     aiResponseLower.includes('building your miniapp') ||
@@ -296,6 +298,7 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
                 if (isConfirmedByText || isConfirmedByAPI) {
                     console.log('✅ Project confirmation detected! Transitioning to building phase...');
                     setCurrentPhase('building');
+                    setHasTriggeredGeneration(true); // Mark that we've triggered generation to prevent duplicates
 
                     // Use the AI's analysis as the final prompt
                     const finalPrompt = aiResponse;
@@ -308,6 +311,8 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
             }
         } catch (err) {
             console.error('Error:', err);
+            // Reset generation flag on error to allow retry
+            setHasTriggeredGeneration(false);
             // setError(err instanceof Error ? err.message : 'An error occurred');
             setChat(prev => [
                 ...prev,
@@ -325,10 +330,12 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
     };
 
     const handleGenerateProject = async (generationPrompt: string) => {
-        if (!generationPrompt.trim() || !sessionToken) {
+        if (!generationPrompt.trim() || !sessionToken || isGenerating) {
             // setError('Please enter a prompt');
+            console.log('⚠️ Skipping project generation: invalid prompt, no session token, or already generating');
             return;
         }
+        console.log('🚀 Starting project generation...');
         setIsGenerating(true);
         // setError(null);
         try {
@@ -380,6 +387,9 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
             
             onProjectGenerated(project);
             setCurrentPhase('editing');
+            
+            // Reset generation flag after successful generation
+            setHasTriggeredGeneration(false);
 
             // Add generation success message to chat
             const aiMessage = project.generatedFiles && project.generatedFiles.length > 0
@@ -428,6 +438,8 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
             ]);
         } finally {
             setIsGenerating(false);
+            // Reset generation flag on completion (success or error)
+            setHasTriggeredGeneration(false);
         }
     };
 
