@@ -48,7 +48,29 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
     const [chatSessionId, setChatSessionId] = useState<string>('');
     const [chatProjectId, setChatProjectId] = useState<string>(''); // Track the actual project ID where chat messages are stored
     const [currentPhase, setCurrentPhase] = useState<'requirements' | 'building' | 'editing'>('requirements');
-    const [hasTriggeredGeneration, setHasTriggeredGeneration] = useState(false); // Prevent duplicate generation calls
+    
+    // Persistent generation flag using sessionStorage to prevent duplicates across re-mounts
+    const getGenerationFlag = () => {
+        try {
+            return sessionStorage.getItem(`generation_triggered_${chatSessionId}`) === 'true';
+        } catch {
+            return false;
+        }
+    };
+    
+    const setGenerationFlag = (value: boolean) => {
+        try {
+            if (value) {
+                sessionStorage.setItem(`generation_triggered_${chatSessionId}`, 'true');
+            } else {
+                sessionStorage.removeItem(`generation_triggered_${chatSessionId}`);
+            }
+        } catch {
+            // Ignore localStorage errors
+        }
+    };
+    
+    const [hasTriggeredGeneration, setHasTriggeredGeneration] = useState(() => getGenerationFlag());
 
     // Function to scroll to bottom of chat
     const scrollToBottom = () => {
@@ -60,8 +82,14 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
     // Initialize chat session
     useEffect(() => {
         if (!chatSessionId) {
-            setChatSessionId(crypto.randomUUID());
-            setHasTriggeredGeneration(false); // Reset generation flag for new session
+            const newSessionId = crypto.randomUUID();
+            setChatSessionId(newSessionId);
+            // Clean up any old generation flags for this new session
+            try {
+                sessionStorage.removeItem(`generation_triggered_${newSessionId}`);
+            } catch {
+                // Ignore errors
+            }
         }
     }, [chatSessionId]);
 
@@ -122,7 +150,7 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
         };
 
         loadChatMessages();
-    }, [currentProject?.projectId, sessionToken, currentPhase, chat.length, aiLoading, currentProject]);
+    }, [currentProject?.projectId, sessionToken]); // Removed problematic dependencies that cause infinite loops
 
     // Show warning message once when user hasn't started chatting
     useEffect(() => {
@@ -298,7 +326,8 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
                 if (isConfirmedByText || isConfirmedByAPI) {
                     console.log('✅ Project confirmation detected! Transitioning to building phase...');
                     setCurrentPhase('building');
-                    setHasTriggeredGeneration(true); // Mark that we've triggered generation to prevent duplicates
+                    setHasTriggeredGeneration(true);
+                    setGenerationFlag(true); // Persist flag in sessionStorage to prevent duplicates across re-mounts
 
                     // Use the AI's analysis as the final prompt
                     const finalPrompt = aiResponse;
@@ -313,6 +342,7 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
             console.error('Error:', err);
             // Reset generation flag on error to allow retry
             setHasTriggeredGeneration(false);
+            setGenerationFlag(false);
             // setError(err instanceof Error ? err.message : 'An error occurred');
             setChat(prev => [
                 ...prev,
@@ -341,13 +371,21 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
         try {
             console.log('🚀 Starting generation with prompt:', generationPrompt.substring(0, 200) + '...');
 
-
+            // Set up abort controller for timeout handling
+            const abortController = new AbortController();
+            const timeoutId = setTimeout(() => {
+                console.log('⏰ Generation request timeout after 8 minutes');
+                abortController.abort();
+            }, 8 * 60 * 1000); // 8 minute timeout (less than server's 10min to fail gracefully)
 
             const response = await fetch('/api/generate', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${sessionToken}` },
                 body: JSON.stringify({ prompt: generationPrompt }),
+                signal: abortController.signal,
             });
+
+            clearTimeout(timeoutId);
             if (!response.ok) {
                 const errorData = await response.json();
                 const errorMessage = errorData.details || errorData.error || 'Failed to generate project';
@@ -390,6 +428,7 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
             
             // Reset generation flag after successful generation
             setHasTriggeredGeneration(false);
+            setGenerationFlag(false);
 
             // Add generation success message to chat
             const aiMessage = project.generatedFiles && project.generatedFiles.length > 0
@@ -424,14 +463,23 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
                 }
             }
         } catch (err) {
-            const errorMessage = err instanceof Error ? err.message : 'An error occurred';
+            let errorMessage = 'An error occurred';
+            
+            if (err instanceof Error) {
+                if (err.name === 'AbortError') {
+                    errorMessage = 'Generation request timed out. The server might be overloaded. Please try again.';
+                } else {
+                    errorMessage = err.message;
+                }
+            }
+            
             console.error('Generation failed:', errorMessage);
             // setError(errorMessage);
             setChat(prev => [
                 ...prev,
                 {
                     role: 'ai',
-                    content: `❌ Failed to generate project, Please try again.`,
+                    content: `❌ ${errorMessage}`,
                     phase: 'building',
                     timestamp: Date.now()
                 }
@@ -440,6 +488,7 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
             setIsGenerating(false);
             // Reset generation flag on completion (success or error)
             setHasTriggeredGeneration(false);
+            setGenerationFlag(false);
         }
     };
 
