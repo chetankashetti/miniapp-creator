@@ -891,11 +891,32 @@ FARCASTER AUTHENTICATION (CRITICAL - MUST PRESERVE):
     <ConnectWallet />
   )}
 
-SOLIDITY DOCUMENTATION (CRITICAL):
-- For functions with multiple return values, use separate @return tags for each parameter
-- Example: @return id Poll ID, @return question Poll question, @return options Poll options array
-- NEVER use generic @return descriptions like "@return Poll data" - always specify each return parameter
-- Each @return tag must match the function's return parameters in order
+
+=== SMART CONTRACT PATTERNS ===
+BLOCKCHAIN: Use pre-vetted templates (ERC20Template.sol, ERC721Template.sol, EscrowTemplate.sol), modify contracts/scripts/deploy.js, include ABI placeholders
+- 🚨 CLIENT DIRECTIVE: ALWAYS start React component files with 'use client'; directive (CRITICAL - MISSING THIS CAUSES BUILD FAILURE)
+- 🚨 CLIENT DIRECTIVE: This MUST be the first line of EVERY React component file
+- 🚨 CLIENT DIRECTIVE: Pattern: 'use client'; (exactly this format, no variations)
+
+NFT/TOKEN CONTRACTS:
+- Multi-type tokens need: mapping(uint256 => uint256) public tokenToType; store on mint
+- Soulbound: check per-token via tokenToType, allow mint/burn even if soulbound
+- Track ownership: mapping(address => mapping(uint256 => bool)) userOwnsType
+- Use counters for IDs, OpenZeppelin imports for standards
+
+SOLIDITY:
+- Use require() with descriptive errors, comprehensive events with indexed params
+- Gas optimize: appropriate types, pack structs, memory/calldata correctly
+- Access control: Ownable/AccessControl, ReentrancyGuard for external calls
+- Multi-return @return tags: @return id Token ID, @return owner Owner address (never generic)
+
+DEPLOYMENT:
+- Save JSON: {ContractName: "0x...", network, chainId, rpcUrl, deployer, timestamp, txHashes}
+- try-catch, verify args, env vars for secrets, log progress clearly
+
+FRONTEND INTEGRATION:
+- TypeScript types from ABIs, wagmi hooks (useContractRead/Write/WaitForTransaction)
+- Handle tx states: idle→loading→success/error, show progress, estimate gas, cache reads
 
 ESLINT COMPLIANCE (CRITICAL - BUILD WILL FAIL IF VIOLATED):
 - Remove unused variables from destructuring: const { used, unused } = hook() → const { used } = hook()
@@ -918,10 +939,6 @@ ESLINT COMPLIANCE (CRITICAL - BUILD WILL FAIL IF VIOLATED):
 - NEVER use 'let' for variables that are never reassigned - ALWAYS use 'const' (prefer-const rule)
 - React Hook dependencies: Include ALL values from component scope (props, state, context) that are used inside the callback
 - NEVER use empty interfaces: export interface Props extends BaseProps {} → export type Props = BaseProps;
-BLOCKCHAIN: Use pre-vetted templates (ERC20Template.sol, ERC721Template.sol, EscrowTemplate.sol), modify contracts/scripts/deploy.js, include ABI placeholders
-- 🚨 CLIENT DIRECTIVE: ALWAYS start React component files with 'use client'; directive (CRITICAL - MISSING THIS CAUSES BUILD FAILURE)
-- 🚨 CLIENT DIRECTIVE: This MUST be the first line of EVERY React component file
-- 🚨 CLIENT DIRECTIVE: Pattern: 'use client'; (exactly this format, no variations)
 - Return valid JSON array only - NO EXPLANATIONS, NO TEXT, ONLY JSON
 
 REMEMBER: Return ONLY the JSON array above surrounded by __START_JSON__ and __END_JSON__ markers. No other text, no explanations, no markdown formatting.
@@ -1209,6 +1226,7 @@ CRITICAL FIXES ONLY - PRESERVE EXISTING IMPLEMENTATIONS:
    - Fix missing useEffect dependencies (react-hooks/exhaustive-deps)
    - Fix React hooks rules violations (react-hooks/rules-of-hooks)
    - Fix unescaped entities in JSX (react/no-unescaped-entities)
+   - Fix explicit any types (@typescript-eslint/no-explicit-any) - replace with proper types
    - Remove any unused destructured variables
    - Remove any unused imported modules
    - Replace Array.from() with for loops when calling hooks
@@ -1445,6 +1463,17 @@ function validateClientDirectives(
   const missingClientDirective: { file: string; reason: string }[] = [];
 
   files.forEach((file) => {
+    // Skip non-React files that don't need 'use client' directive
+    const isReactFile = file.filename.endsWith('.tsx') || file.filename.endsWith('.jsx');
+    const isTypeScriptFile = file.filename.endsWith('.ts') || file.filename.endsWith('.js');
+    const isContractFile = file.filename.endsWith('.sol');
+    const isSvgFile = file.filename.endsWith('.svg');
+    const isConfigFile = file.filename.includes('config') || file.filename.includes('deploy');
+    
+    // Only check React/TypeScript files, skip contracts, SVGs, and config files
+    if (!isReactFile && !isTypeScriptFile) return;
+    if (isContractFile || isSvgFile || isConfigFile) return;
+    
     // For modify operations, we should analyze the actual file content, not the diff
     // The diff will be applied to create the final content, so we need to simulate that
     let contentToAnalyze: string | undefined;
@@ -1511,6 +1540,16 @@ function validateTypeScriptIssues(
   const typeErrors: { file: string; error: string }[] = [];
 
   files.forEach((file) => {
+    // Skip non-TypeScript files
+    const isTypeScriptFile = file.filename.endsWith('.ts') || file.filename.endsWith('.tsx');
+    const isContractFile = file.filename.endsWith('.sol');
+    const isSvgFile = file.filename.endsWith('.svg');
+    const isConfigFile = file.filename.includes('config') || file.filename.includes('deploy');
+    
+    // Only check TypeScript files, skip contracts, SVGs, and config files
+    if (!isTypeScriptFile) return;
+    if (isContractFile || isSvgFile || isConfigFile) return;
+    
     // For modify operations, we should analyze the actual file content, not the diff
     let contentToAnalyze: string | undefined;
     
@@ -1530,6 +1569,15 @@ function validateTypeScriptIssues(
     }
     
     if (!contentToAnalyze) return; // Skip if no content to analyze
+
+    // Check for explicit 'any' types which are flagged by ESLint
+    const hasExplicitAny = /:\s*any\b/g.test(contentToAnalyze);
+    if (hasExplicitAny) {
+      typeErrors.push({
+        file: file.filename,
+        error: "Unexpected any. Specify a different type. @typescript-eslint/no-explicit-any",
+      });
+    }
 
     // Only check for critical syntax errors that would prevent compilation
     // Check for missing React imports when using hooks
@@ -1577,6 +1625,17 @@ function validateReactIssues(files: { filename: string; content?: string; unifie
   const reactErrors: { file: string; error: string }[] = [];
 
   files.forEach((file) => {
+    // Skip non-React files that don't need React-specific validation
+    const isReactFile = file.filename.endsWith('.tsx') || file.filename.endsWith('.jsx');
+    const isTypeScriptFile = file.filename.endsWith('.ts') || file.filename.endsWith('.js');
+    const isContractFile = file.filename.endsWith('.sol');
+    const isSvgFile = file.filename.endsWith('.svg');
+    const isConfigFile = file.filename.includes('config') || file.filename.includes('deploy');
+    
+    // Only check React/TypeScript files, skip contracts, SVGs, and config files
+    if (!isReactFile && !isTypeScriptFile) return;
+    if (isContractFile || isSvgFile || isConfigFile) return;
+    
     // For modify operations, we should analyze the actual file content, not the diff
     let contentToAnalyze: string | undefined;
     
@@ -2192,15 +2251,24 @@ export async function executeMultiStagePipeline(
       console.log("  React Error Details:", reactValidation.reactErrors);
     }
 
-    // For initial generation, always run Stage 4 validation on all files
-    // For follow-up changes, only run Stage 4 if there are validation errors
-    const shouldRunStage4 = isInitialGeneration || hasValidationErrors;
+    // CRITICAL: Prevent double generation by being more conservative about when to run Stage 4
+    // Only run Stage 4 if there are actual validation errors that would prevent compilation
+    // For initial generation, only run Stage 4 if there are critical errors, not for all files
+    const shouldRunStage4 = hasValidationErrors;
     
     if (shouldRunStage4) {
       if (isInitialGeneration) {
         console.log("📝 Initial generation - running Stage 4 validation on all files");
       } else {
         console.log("⚠️ Validation failed, attempting fixes...");
+        console.log("🔍 Stage 4 trigger details:");
+        console.log(`  - isInitialGeneration: ${isInitialGeneration}`);
+        console.log(`  - hasValidationErrors: ${hasValidationErrors}`);
+        console.log(`  - validation.isValid: ${validation.isValid}`);
+        console.log(`  - missingImports: ${importValidation.missingImports.length}`);
+        console.log(`  - missingClientDirective: ${clientDirectiveValidation.missingClientDirective.length}`);
+        console.log(`  - typeErrors: ${typescriptValidation.typeErrors.length}`);
+        console.log(`  - reactErrors: ${reactValidation.reactErrors.length}`);
       }
       
       const errors = [
@@ -2246,10 +2314,57 @@ export async function executeMultiStagePipeline(
       });
 
       if (isInitialGeneration) {
-        // For initial generation, send ALL files to Stage 4 for final validation and formatting
-        console.log("📝 Initial generation - sending all files to Stage 4 for final validation");
-        validFiles = [];
-        invalidFiles = generatedFiles.map(file => ({
+        // For initial generation, only send files with critical errors to Stage 4
+        console.log("📝 Initial generation - only sending files with critical errors to Stage 4");
+        
+        // Filter files with critical errors for initial generation too
+        validFiles = generatedFiles.filter((file) => {
+          const isMissingFile = validation.missingFiles.some((f) =>
+            f.includes(file.filename)
+          );
+          const isMissingClientDirective =
+            clientDirectiveValidation.missingClientDirective.some(
+              (m) => m.file === file.filename
+            );
+          const hasTypeScriptError = typescriptValidation.typeErrors.some(
+            (t) => t.file === file.filename
+          );
+          const hasReactError = reactValidation.reactErrors.some(
+            (r) => r.file === file.filename
+          );
+
+          // Only keep files that don't have critical compilation errors
+          const hasCriticalError = isMissingFile || 
+                                  isMissingClientDirective || 
+                                  hasTypeScriptError || 
+                                  hasReactError;
+          
+          return !hasCriticalError;
+        });
+
+        invalidFiles = generatedFiles.filter((file) => {
+          const isMissingFile = validation.missingFiles.some((f) =>
+            f.includes(file.filename)
+          );
+          const isMissingClientDirective =
+            clientDirectiveValidation.missingClientDirective.some(
+              (m) => m.file === file.filename
+            );
+          const hasTypeScriptError = typescriptValidation.typeErrors.some(
+            (t) => t.file === file.filename
+          );
+          const hasReactError = reactValidation.reactErrors.some(
+            (r) => r.file === file.filename
+          );
+
+          // Only mark as invalid if there are critical compilation errors
+          const hasCriticalError = isMissingFile || 
+                                  isMissingClientDirective || 
+                                  hasTypeScriptError || 
+                                  hasReactError;
+          
+          return hasCriticalError;
+        }).map(file => ({
           filename: file.filename,
           content: file.content || '' // Ensure content is always a string
         }));
@@ -2329,7 +2444,12 @@ export async function executeMultiStagePipeline(
         console.warn(`⚠️ This indicates Stage 3 diff application failed - Stage 4 cannot fix empty files`);
       }
       
-      if (filesWithContent.length > 0) {
+      // CRITICAL: Prevent double generation by not running Stage 4 if no files need fixing
+      if (filesWithContent.length === 0) {
+        console.log("✅ No files with content to rewrite - skipping Stage 4 to prevent double generation");
+        console.log(`⚠️ Note: ${emptyFiles.length} empty files were skipped (Stage 3 diff application failed)`);
+        generatedFiles = validFiles;
+      } else if (filesWithContent.length > 0) {
         console.log(`🔄 Rewriting ${filesWithContent.length} invalid files using LLM...`);
         const rewrittenFiles = await callLLM(
           getStage4ValidatorPrompt(filesWithContent, errors, isInitialGeneration),
