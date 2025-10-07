@@ -143,6 +143,68 @@ function validateAndCorrectHunk(hunk: DiffHunk): DiffHunk {
 }
 
 /**
+ * Pre-validate diff hunks against actual file content to catch potential context mismatches
+ */
+export function validateDiffHunksAgainstFile(
+  filePath: string,
+  fileContent: string,
+  diffHunks: DiffHunk[]
+): { isValid: boolean; errors: string[] } {
+  const errors: string[] = [];
+  const lines = fileContent.split('\n');
+
+  for (const hunk of diffHunks) {
+    // Check if hunk start position is valid
+    if (hunk.oldStart < 1 || hunk.oldStart > lines.length) {
+      errors.push(`Hunk starts at invalid line ${hunk.oldStart} (file has ${lines.length} lines)`);
+      continue;
+    }
+
+    // Extract context lines from the hunk to validate against file content
+    const contextLines = hunk.lines
+      .filter(line => line.startsWith(' ') || (!line.startsWith('+') && !line.startsWith('-')))
+      .map(line => line.startsWith(' ') ? line.substring(1) : line);
+
+    if (contextLines.length === 0) {
+      errors.push(`Hunk at line ${hunk.oldStart} has no context lines for validation`);
+      continue;
+    }
+
+    // Find the first context line in the actual file content
+    const firstContextLine = contextLines[0];
+    let actualStartIndex = -1;
+
+    // Search for the context line near the expected position
+    const searchStart = Math.max(0, hunk.oldStart - 10);
+    const searchEnd = Math.min(lines.length, hunk.oldStart + 10);
+
+    for (let i = searchStart; i < searchEnd; i++) {
+      if (lines[i] && lines[i].trim() === firstContextLine.trim()) {
+        actualStartIndex = i + 1; // Convert to 1-based indexing
+        break;
+      }
+    }
+
+    if (actualStartIndex === -1) {
+      errors.push(`Context line "${firstContextLine}" not found near line ${hunk.oldStart} in ${filePath}`);
+    } else if (Math.abs(actualStartIndex - hunk.oldStart) > 5) {
+      errors.push(`Context line "${firstContextLine}" found at line ${actualStartIndex}, but hunk expects line ${hunk.oldStart} (difference: ${Math.abs(actualStartIndex - hunk.oldStart)})`);
+    }
+
+    // Validate that we have enough lines in the file for this hunk
+    const hunkEndLine = hunk.oldStart + hunk.oldLines - 1;
+    if (hunkEndLine > lines.length) {
+      errors.push(`Hunk extends to line ${hunkEndLine} but file only has ${lines.length} lines`);
+    }
+  }
+
+  return {
+    isValid: errors.length === 0,
+    errors
+  };
+}
+
+/**
  * Find the best contextual match for a line when exact match fails
  */
 // eslint-disable-next-line @typescript-eslint/no-unused-vars

@@ -2,9 +2,8 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { applyDiffToContent, parseUnifiedDiff } from './diffUtils';
+import { parseUnifiedDiff, applyDiffToContent } from './diffUtils';
 import { applyDiffsToFiles } from './diffBasedPipeline';
-import { getDiffStatistics } from './enhancedPipeline';
 import { 
   parseStage2PatchResponse, 
   parseStage3CodeResponse, 
@@ -246,12 +245,24 @@ ${currentFiles.map(f => `- ${f.filename}`).join('\n')}
 
 AVAILABLE TOOLS:
 - grep: Search for patterns in files
-- find: Find files by name or type
-- tree: Show directory structure
-- cat: Read file contents
-- head/tail: Show first/last lines of files
-- wc: Count lines, words, characters
+  Usage: {"tool": "grep", "args": ["pattern", "file_or_directory"], "workingDirectory": "src"}
+  Example: {"tool": "grep", "args": ["useState", "app/page.tsx"], "workingDirectory": "src"}
+  
+- cat: Read complete file contents  
+  Usage: {"tool": "cat", "args": ["file_path"], "workingDirectory": "src"}
+  Example: {"tool": "cat", "args": ["components/TodoList.tsx"], "workingDirectory": "src"}
+  
+- find: Find files by name pattern
+  Usage: {"tool": "find", "args": [".", "-name", "*.tsx"], "workingDirectory": "src"}
+  
 - ls: List directory contents
+  Usage: {"tool": "ls", "args": ["-la", "components"], "workingDirectory": "src"}
+
+TOOL USAGE RULES:
+- ALWAYS use "src" as workingDirectory for React components
+- For grep: Use specific file paths rather than broad directory searches
+- For file paths: Use relative paths from the workingDirectory (e.g., "app/page.tsx", not "src/app/page.tsx")
+- Avoid complex patterns that might fail - keep searches simple and specific
 
 CRITICAL: You MUST return ONLY valid JSON. No explanations, no text, no markdown, no code fences.
 
@@ -642,13 +653,18 @@ ROLE: Patch Planner for Farcaster Miniapp - Follow-up Changes
 
 INTENT: ${JSON.stringify(intentSpec, null, 2)}
 
-CURRENT FILES:
-${currentFiles.map((f) => `---${f.filename}---\n${f.content}`).join("\n\n")}
+CURRENT FILES (with line numbers for accurate diff planning):
+${currentFiles.map((f) => {
+  const lines = f.content.split('\n');
+  const numberedContent = lines.map((line, index) => `${(index + 1).toString().padStart(3, ' ')}|${line}`).join('\n');
+  return `---${f.filename}---\n${numberedContent}`;
+}).join("\n\n")}
 
 TASK: Plan detailed file changes to implement the intent and generate unified diff hunks for surgical changes
 
 DIFF GENERATION REQUIREMENTS - CRITICAL:
 - For each file modification, generate unified diff hunks in VALID format: @@ -oldStart,oldLines +newStart,newLines @@
+- Use the numbered lines (e.g., "  5|import { useState }") from CURRENT FILES to determine exact line positions
 - oldLines and newLines MUST be the ACTUAL count of lines in that section (NEVER use 0)
 - Include 2-3 context lines (unchanged lines with space prefix) around changes for better accuracy
 - Use + prefix for added lines, - prefix for removed lines, space prefix for context lines
@@ -663,12 +679,20 @@ UNIFIED DIFF FORMAT VALIDATION:
 ❌ WRONG: @@ -2,0 +3,1 @@     (NEVER use 0 for oldLines - must be actual count)
 ❌ WRONG: @@ -5 +5,2 @@        (missing line counts - must include both)
 
-LINE COUNTING RULES:
+LINE COUNTING WITH NUMBERED CONTENT:
+- Use the numbered lines from CURRENT FILES to calculate exact positions
 - Count ALL lines in the hunk including context lines, removed lines, and added lines
 - oldLines = number of context lines + number of removed lines (lines with - prefix)
 - newLines = number of context lines + number of added lines (lines with + prefix)
+- Example: To modify line 15, include context from lines 13-14 and 16-17
 - If adding 2 new lines with 3 context lines: oldLines=3, newLines=5
 - If removing 1 line with 2 context lines: oldLines=3, newLines=2
+
+HUNK VALIDATION CHECKLIST:
+- Does the hunk start and end with context lines (space prefix)?
+- Do the line counts (oldLines, newLines) match the actual number of lines in the hunk?
+- Are the line numbers (oldStart, newStart) correct based on the numbered content?
+- Are context lines exactly matching the numbered content from CURRENT FILES?
 
 BOILERPLATE CONTEXT:
 ${JSON.stringify(FARCASTER_BOILERPLATE_CONTEXT, null, 2)}
@@ -952,8 +976,12 @@ INTENT: ${JSON.stringify(intentSpec, null, 2)}
 
 DETAILED PATCH PLAN: ${JSON.stringify(patchPlan, null, 2)}
 
-CURRENT FILES:
-${currentFiles.map((f) => `---${f.filename}---\n${f.content}`).join("\n\n")}
+CURRENT FILES (with line numbers for accurate diff calculation):
+${currentFiles.map((f) => {
+  const lines = f.content.split('\n');
+  const numberedContent = lines.map((line, index) => `${(index + 1).toString().padStart(3, ' ')}|${line}`).join('\n');
+  return `---${f.filename}---\n${numberedContent}`;
+}).join("\n\n")}
 
 BOILERPLATE CONTEXT:
 ${JSON.stringify(FARCASTER_BOILERPLATE_CONTEXT, null, 2)}
@@ -975,12 +1003,46 @@ CRITICAL: 'use client' DIRECTIVE IN DIFFS:
 - Example: If you see "import { ... }" in the current file, it's actually line 2, not line 1
 
 CRITICAL LINE NUMBER CALCULATION:
-- ALWAYS calculate line numbers based on the ACTUAL current file content provided above
+- ALWAYS calculate line numbers based on the ACTUAL current file content provided above (with line numbers)
 - Count lines in the current file to determine correct oldStart, oldLines, newStart, newLines
-- Use context lines (unchanged lines) to anchor your diffs for better accuracy
-- Include 2-3 context lines before and after changes for better matching
-- Verify line numbers by checking the actual file structure in CURRENT FILES section
-- DO NOT use example line numbers from this prompt - calculate them from actual content
+- Use the numbered lines (e.g., "  5|import { useState }") to determine exact line positions
+- REQUIRED: Include 2-3 context lines (unchanged lines with space prefix) before and after changes
+- Verify line numbers by cross-referencing the numbered content in CURRENT FILES section
+- oldLines = count of context lines + removed lines (lines with - prefix)
+- newLines = count of context lines + added lines (lines with + prefix)
+- DO NOT use example line numbers from this prompt - calculate them from the actual numbered content above
+
+EXAMPLE LINE NUMBER CALCULATION:
+If you want to modify line 10 and the numbered content shows:
+  8|import React from 'react';
+  9|import { Button } from './Button';
+ 10|import { Input } from './Input';
+ 11|
+ 12|export function Component() {
+
+Then your diff hunk should be:
+oldStart: 8, oldLines: 5, newStart: 8, newLines: 6
+lines: [
+  " import React from 'react';",
+  " import { Button } from './Button';", 
+  "-import { Input } from './Input';",
+  "+import { Input, Select } from './Input';",
+  " ",
+  " export function Component() {"
+]
+
+CONTEXT LINE MATCHING RULES:
+- Context lines (space prefix) MUST exactly match the numbered content
+- Never use empty strings ("") as context lines unless the actual file has blank lines
+- Always include the exact text after the pipe (|) symbol from numbered content
+- Count blank lines correctly - they appear as numbered lines with nothing after the pipe
+
+DIFF VALIDATION RULES:
+- Every hunk MUST start and end with context lines (space prefix)  
+- Line counts MUST match the actual number of lines in the hunk
+- If adding 2 lines with 3 context lines: oldLines=3, newLines=5
+- If removing 1 line with 3 context lines: oldLines=4, newLines=3
+- NEVER use 0 for oldLines or newLines - always count actual lines
 
 IMPLEMENTATION GUIDANCE FROM PATCH PLAN:
 - Follow the "purpose" field for each file to understand the overall goal
@@ -1231,6 +1293,7 @@ CRITICAL FIXES ONLY - PRESERVE EXISTING IMPLEMENTATIONS:
    - Remove any unused imported modules
    - Replace Array.from() with for loops when calling hooks
    - Escape apostrophes (&apos;), quotes (&quot;), and ampersands (&amp;) in JSX
+   - Fix duplicate 'use client' directives - keep only one at the very top
 
 PRESERVATION RULES:
 - If the original file had a Button component with Check icon, keep it
@@ -1516,14 +1579,23 @@ function validateClientDirectives(
     const usesEventHandlers = /onClick|onChange|onSubmit|onFocus|onBlur|onKeyDown|onKeyUp|onMouseEnter|onMouseLeave/.test(contentToAnalyze);
     const hasJSX = /<[A-Z][a-zA-Z]*\s*[^>]*>/g.test(contentToAnalyze);
     
-    // FIXED REGEX - Look for the actual directive format
-    const hasClientDirective = /^'use client';?/m.test(contentToAnalyze);
+    // FIXED REGEX - Look for the actual directive format (handle multiple occurrences)
+    const clientDirectiveMatches = contentToAnalyze.match(/^'use client';?/gm);
+    const hasClientDirective = clientDirectiveMatches && clientDirectiveMatches.length > 0;
 
     // Only flag if it's clearly a client component
     if ((usesClientHooks || usesEventHandlers || hasJSX) && !hasClientDirective) {
       missingClientDirective.push({
         file: file.filename,
         reason: "Uses client-side features but missing 'use client' directive",
+      });
+    }
+    
+    // Check for duplicate 'use client' directives
+    if (clientDirectiveMatches && clientDirectiveMatches.length > 1) {
+      missingClientDirective.push({
+        file: file.filename,
+        reason: `Has ${clientDirectiveMatches.length} duplicate 'use client' directives - should only have one`,
       });
     }
   });
@@ -1692,8 +1764,248 @@ function validateReactIssues(files: { filename: string; content?: string; unifie
   return { reactErrors };
 }
 
-// Multi-stage pipeline orchestrator with detailed logging
-export async function executeMultiStagePipeline(
+// ========================================================================
+// SHARED PIPELINE STAGES (Stage 1 & 2)
+// ========================================================================
+
+/**
+ * Stage 1: Intent Parser - Shared by both pipelines
+ * Parses user request into structured specification
+ */
+async function executeStage1IntentParser(
+  userPrompt: string,
+  callLLM: (
+    systemPrompt: string,
+    userPrompt: string,
+    stageName: string,
+    stageType?: keyof typeof STAGE_MODEL_CONFIG
+  ) => Promise<string>,
+  projectId?: string
+): Promise<IntentSpec> {
+  console.log("\n" + "=".repeat(50));
+  console.log("📋 STAGE 1: Intent Parser");
+  console.log("=".repeat(50));
+
+  const intentPrompt = `USER REQUEST: ${userPrompt}`;
+  console.log("📤 Sending to LLM (Stage 1):");
+  console.log(
+    "System Prompt Length:",
+    getStage1IntentParserPrompt().length,
+    "chars"
+  );
+  console.log("User Prompt:", intentPrompt);
+
+  const startTime1 = Date.now();
+  const intentResponse = await callLLM(
+    getStage1IntentParserPrompt(),
+    intentPrompt,
+    "Stage 1: Intent Parser",
+    "STAGE_1_INTENT_PARSER"
+  );
+  const endTime1 = Date.now();
+  
+  // Log Stage 1 response for debugging
+  if (projectId) {
+    logStageResponse(projectId, 'stage1-intent-parser', intentResponse, {
+      systemPromptLength: getStage1IntentParserPrompt().length,
+      userPromptLength: intentPrompt.length,
+      responseTime: endTime1 - startTime1
+    });
+  }
+
+  console.log("📥 Received from LLM (Stage 1):");
+  console.log("Response Length:", intentResponse.length, "chars");
+  console.log("Response Time:", endTime1 - startTime1, "ms");
+
+  let intentSpec: IntentSpec;
+  try {
+    intentSpec = JSON.parse(intentResponse);
+  } catch (error) {
+    console.error("❌ Failed to parse Stage 1 response as JSON:");
+    console.error("Raw response:", intentResponse);
+    throw new Error(
+      `Stage 1 JSON parsing failed: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
+  }
+
+  // Validate intent spec structure
+  if (!intentSpec || typeof intentSpec !== "object") {
+    throw new Error("Stage 1 response is not a valid object");
+  }
+
+  if (!intentSpec.feature || typeof intentSpec.feature !== "string") {
+    throw new Error("Stage 1 response missing 'feature' field");
+  }
+
+  if (!Array.isArray(intentSpec.requirements)) {
+    throw new Error("Stage 1 response missing 'requirements' array");
+  }
+
+  if (!Array.isArray(intentSpec.targetFiles)) {
+    throw new Error("Stage 1 response missing 'targetFiles' array");
+  }
+
+  if (!Array.isArray(intentSpec.dependencies)) {
+    throw new Error("Stage 1 response missing 'dependencies' array");
+  }
+
+  if (typeof intentSpec.needsChanges !== "boolean") {
+    throw new Error("Stage 1 response missing 'needsChanges' boolean field");
+  }
+
+  console.log("✅ Stage 1 complete - Parsed Intent:");
+  console.log("  Feature:", intentSpec.feature);
+  console.log("  Requirements:", intentSpec.requirements.length);
+  console.log("  Target Files:", intentSpec.targetFiles.length);
+  console.log("  Dependencies:", intentSpec.dependencies.length);
+  console.log("  Needs Changes:", intentSpec.needsChanges);
+  console.log("  Reason:", intentSpec.reason);
+
+  return intentSpec;
+}
+
+/**
+ * Stage 2: Patch Planner - Shared by both pipelines
+ * Creates detailed patch plan based on intent
+ */
+async function executeStage2PatchPlanner(
+  userPrompt: string,
+  intentSpec: IntentSpec,
+  currentFiles: { filename: string; content: string }[],
+  callLLM: (
+    systemPrompt: string,
+    userPrompt: string,
+    stageName: string,
+    stageType?: keyof typeof STAGE_MODEL_CONFIG
+  ) => Promise<string>,
+  isInitialGeneration: boolean,
+  projectId?: string
+): Promise<PatchPlan> {
+  console.log("\n" + "=".repeat(50));
+  console.log("📝 STAGE 2: Patch Planner");
+  console.log("=".repeat(50));
+
+  const patchPrompt = `USER REQUEST: ${userPrompt}`;
+  console.log("📤 Sending to LLM (Stage 2):");
+  console.log(
+    "System Prompt Length:",
+    getStage2PatchPlannerPrompt(intentSpec, currentFiles, isInitialGeneration).length,
+    "chars"
+  );
+  console.log("User Prompt:", patchPrompt);
+  console.log("Intent Spec:", JSON.stringify(intentSpec, null, 2));
+
+  const startTime2 = Date.now();
+  const patchResponse = await callLLM(
+    getStage2PatchPlannerPrompt(intentSpec, currentFiles, isInitialGeneration),
+    patchPrompt,
+    "Stage 2: Patch Planner",
+    "STAGE_2_PATCH_PLANNER"
+  );
+  const endTime2 = Date.now();
+  
+  // Log Stage 2 response for debugging
+  if (projectId) {
+    logStageResponse(projectId, 'stage2-patch-planner', patchResponse, {
+      systemPromptLength: getStage2PatchPlannerPrompt(intentSpec, currentFiles, isInitialGeneration).length,
+      userPromptLength: patchPrompt.length,
+      responseTime: endTime2 - startTime2,
+      intentSpec: intentSpec
+    });
+  }
+
+  console.log("📥 Received from LLM (Stage 2):");
+  console.log("Response Length:", patchResponse.length, "chars");
+  console.log("Response Time:", endTime2 - startTime2, "ms");
+  console.log("Raw Response:", patchResponse.substring(0, 500) + "...");
+
+  const patchPlan: PatchPlan = parseStage2PatchResponse(patchResponse);
+
+  // Check for potential truncation
+  const isPotentiallyTruncated = isResponseTruncated(patchResponse);
+  
+  if (isPotentiallyTruncated) {
+    console.warn("⚠️ Stage 2 response appears to be truncated. Retry logic is handled in callClaudeWithLogging.");
+    console.warn("Response ends with:", patchResponse.slice(-100));
+  }
+
+  // Validate patch plan structure
+  if (!patchPlan.patches || !Array.isArray(patchPlan.patches)) {
+    throw new Error(
+      "Invalid patch plan: patches array is missing or not an array"
+    );
+  }
+
+  // Analyze patch plan
+  let totalPatches = 0;
+  let createPatches = 0;
+  let modifyPatches = 0;
+  let deletePatches = 0;
+
+  patchPlan.patches.forEach((patch, index) => {
+    // Validate each patch structure
+    if (!patch || typeof patch !== "object") {
+      console.warn(`⚠️ Invalid patch ${index + 1}: patch is not an object`);
+      return;
+    }
+
+    if (!patch.filename || typeof patch.filename !== "string") {
+      console.warn(
+        `⚠️ Invalid patch ${index + 1}: filename is missing or not a string`
+      );
+      return;
+    }
+
+    if (
+      !patch.operation ||
+      !["create", "modify", "delete"].includes(patch.operation)
+    ) {
+      console.warn(
+        `⚠️ Invalid patch ${index + 1}: operation is missing or invalid`
+      );
+      return;
+    }
+
+    if (!patch.changes || !Array.isArray(patch.changes)) {
+      console.warn(
+        `⚠️ Invalid patch ${
+          index + 1
+        }: changes array is missing or not an array`
+      );
+      return;
+    }
+
+    totalPatches++;
+    if (patch.operation === 'create') createPatches++;
+    else if (patch.operation === 'modify') modifyPatches++;
+    else if (patch.operation === 'delete') deletePatches++;
+
+    console.log(
+      `  Patch ${index + 1}: ${patch.operation} ${patch.filename} (${
+        patch.changes.length
+      } changes)`
+    );
+  });
+
+  console.log(`\n✅ Stage 2 complete - Generated ${totalPatches} patches`);
+  console.log(`  - Create: ${createPatches}`);
+  console.log(`  - Modify: ${modifyPatches}`);
+  console.log(`  - Delete: ${deletePatches}`);
+
+  return patchPlan;
+}
+
+// ========================================================================
+// INITIAL GENERATION PIPELINE (Complete Files)
+// ========================================================================
+
+/**
+ * Pipeline for initial project generation
+ * Generates complete file contents from boilerplate
+ */
+export async function executeInitialGenerationPipeline(
   userPrompt: string,
   currentFiles: { filename: string; content: string }[],
   callLLM: (
@@ -1702,98 +2014,15 @@ export async function executeMultiStagePipeline(
     stageName: string,
     stageType?: keyof typeof STAGE_MODEL_CONFIG
   ) => Promise<string>,
-  projectId?: string,
-  isInitialGeneration: boolean = false
+  projectId?: string
 ): Promise<{ files: { filename: string; content: string }[]; intentSpec: IntentSpec }> {
   try {
-    console.log("🚀 Starting multi-stage pipeline...");
+    console.log("🚀 Starting INITIAL GENERATION pipeline...");
     console.log("📝 User Prompt:", userPrompt);
     console.log("📁 Current Files Count:", currentFiles.length);
 
-    // Context gathering is handled by the enhanced pipeline
-    console.log("📋 Context already gathered by enhanced pipeline");
-
     // Stage 1: Intent Parser
-    console.log("\n" + "=".repeat(50));
-    console.log("📋 STAGE 1: Intent Parser");
-    console.log("=".repeat(50));
-
-    const intentPrompt = `USER REQUEST: ${userPrompt}`;
-    console.log("📤 Sending to LLM (Stage 1):");
-    console.log(
-      "System Prompt Length:",
-      getStage1IntentParserPrompt().length,
-      "chars"
-    );
-    console.log("User Prompt:", intentPrompt);
-
-    const startTime1 = Date.now();
-    const intentResponse = await callLLM(
-      getStage1IntentParserPrompt(),
-      intentPrompt,
-      "Stage 1: Intent Parser",
-      "STAGE_1_INTENT_PARSER"
-    );
-    const endTime1 = Date.now();
-    
-    // Log Stage 1 response for debugging
-    if (projectId) {
-      logStageResponse(projectId, 'stage1-intent-parser', intentResponse, {
-        systemPromptLength: getStage1IntentParserPrompt().length,
-        userPromptLength: intentPrompt.length,
-        responseTime: endTime1 - startTime1
-      });
-    }
-
-    console.log("📥 Received from LLM (Stage 1):");
-    console.log("Response Length:", intentResponse.length, "chars");
-    console.log("Response Time:", endTime1 - startTime1, "ms");
-
-    let intentSpec: IntentSpec;
-    try {
-      intentSpec = JSON.parse(intentResponse);
-    } catch (error) {
-      console.error("❌ Failed to parse Stage 1 response as JSON:");
-      console.error("Raw response:", intentResponse);
-      throw new Error(
-        `Stage 1 JSON parsing failed: ${
-          error instanceof Error ? error.message : String(error)
-        }`
-      );
-    }
-
-    // Validate intent spec structure
-    if (!intentSpec || typeof intentSpec !== "object") {
-      throw new Error("Stage 1 response is not a valid object");
-    }
-
-    if (!intentSpec.feature || typeof intentSpec.feature !== "string") {
-      throw new Error("Stage 1 response missing 'feature' field");
-    }
-
-    if (!Array.isArray(intentSpec.requirements)) {
-      throw new Error("Stage 1 response missing 'requirements' array");
-    }
-
-    if (!Array.isArray(intentSpec.targetFiles)) {
-      throw new Error("Stage 1 response missing 'targetFiles' array");
-    }
-
-    if (!Array.isArray(intentSpec.dependencies)) {
-      throw new Error("Stage 1 response missing 'dependencies' array");
-    }
-
-    if (typeof intentSpec.needsChanges !== "boolean") {
-      throw new Error("Stage 1 response missing 'needsChanges' boolean field");
-    }
-
-    console.log("✅ Stage 1 complete - Parsed Intent:");
-    console.log("  Feature:", intentSpec.feature);
-    console.log("  Requirements:", intentSpec.requirements.length);
-    console.log("  Target Files:", intentSpec.targetFiles.length);
-    console.log("  Dependencies:", intentSpec.dependencies.length);
-    console.log("  Needs Changes:", intentSpec.needsChanges);
-    console.log("  Reason:", intentSpec.reason);
+    const intentSpec = await executeStage1IntentParser(userPrompt, callLLM, projectId);
 
     // Check if changes are needed
     if (!intentSpec.needsChanges) {
@@ -1807,944 +2036,41 @@ export async function executeMultiStagePipeline(
     }
 
     // Stage 2: Patch Planner
-    console.log("\n" + "=".repeat(50));
-    console.log("📝 STAGE 2: Patch Planner");
-    console.log("=".repeat(50));
-
-    const patchPrompt = `USER REQUEST: ${userPrompt}`;
-    console.log("📤 Sending to LLM (Stage 2):");
-    console.log(
-      "System Prompt Length:",
-      getStage2PatchPlannerPrompt(intentSpec, currentFiles, isInitialGeneration).length,
-      "chars"
-    );
-    console.log("User Prompt:", patchPrompt);
-    console.log("Intent Spec:", JSON.stringify(intentSpec, null, 2));
-
-    const startTime2 = Date.now();
-    const patchResponse = await callLLM(
-      getStage2PatchPlannerPrompt(intentSpec, currentFiles, isInitialGeneration),
-      patchPrompt,
-      "Stage 2: Patch Planner",
-      "STAGE_2_PATCH_PLANNER"
-    );
-    const endTime2 = Date.now();
-    
-    // Log Stage 2 response for debugging
-    if (projectId) {
-      logStageResponse(projectId, 'stage2-patch-planner', patchResponse, {
-        systemPromptLength: getStage2PatchPlannerPrompt(intentSpec, currentFiles, isInitialGeneration).length,
-        userPromptLength: patchPrompt.length,
-        responseTime: endTime2 - startTime2,
-        intentSpec: intentSpec
-      });
-    }
-
-    console.log("📥 Received from LLM (Stage 2):");
-    console.log("Response Length:", patchResponse.length, "chars");
-    console.log("Response Time:", endTime2 - startTime2, "ms");
-    console.log("Raw Response:", patchResponse.substring(0, 500) + "...");
-
-    const patchPlan: PatchPlan = parseStage2PatchResponse(patchResponse);
-
-    // Check for potential truncation by looking for incomplete JSON
-    const isPotentiallyTruncated = isResponseTruncated(patchResponse);
-    
-    if (isPotentiallyTruncated) {
-      console.warn("⚠️ Stage 2 response appears to be truncated. Retry logic is handled in callClaudeWithLogging.");
-      console.warn("Response ends with:", patchResponse.slice(-100));
-    }
-
-    // Validate patch plan structure
-    if (!patchPlan.patches || !Array.isArray(patchPlan.patches)) {
-      throw new Error(
-        "Invalid patch plan: patches array is missing or not an array"
-      );
-    }
-
-    // Analyze patch plan for diff efficiency
-    let totalPatches = 0;
-    let createPatches = 0;
-    let modifyPatches = 0;
-    let deletePatches = 0;
-    let patchesWithDiffs = 0;
-    let totalDiffHunks = 0;
-    let totalDiffLines = 0;
-    let totalUnifiedDiffs = 0;
-
-    patchPlan.patches.forEach((patch, index) => {
-      // Validate each patch structure
-      if (!patch || typeof patch !== "object") {
-        console.warn(`⚠️ Invalid patch ${index + 1}: patch is not an object`);
-        return;
-      }
-
-      if (!patch.filename || typeof patch.filename !== "string") {
-        console.warn(
-          `⚠️ Invalid patch ${index + 1}: filename is missing or not a string`
-        );
-        return;
-      }
-
-      if (
-        !patch.operation ||
-        !["create", "modify", "delete"].includes(patch.operation)
-      ) {
-        console.warn(
-          `⚠️ Invalid patch ${index + 1}: operation is missing or invalid`
-        );
-        return;
-      }
-
-      if (!patch.changes || !Array.isArray(patch.changes)) {
-        console.warn(
-          `⚠️ Invalid patch ${
-            index + 1
-          }: changes array is missing or not an array`
-        );
-        return;
-      }
-
-      // Count patch types
-      totalPatches++;
-      if (patch.operation === 'create') createPatches++;
-      else if (patch.operation === 'modify') modifyPatches++;
-      else if (patch.operation === 'delete') deletePatches++;
-
-      // Analyze diff efficiency
-      if (patch.diffHunks && Array.isArray(patch.diffHunks)) {
-        patchesWithDiffs++;
-        totalDiffHunks += patch.diffHunks.length;
-        
-        patch.diffHunks.forEach(hunk => {
-          if (hunk.lines && Array.isArray(hunk.lines)) {
-            totalDiffLines += hunk.lines.length;
-          }
-        });
-      }
-
-      if (patch.unifiedDiff && typeof patch.unifiedDiff === 'string') {
-        totalUnifiedDiffs++;
-      }
-
-      console.log(
-        `  Patch ${index + 1}: ${patch.operation} ${patch.filename} (${
-          patch.changes.length
-        } changes${patch.diffHunks ? `, ${patch.diffHunks.length} diff hunks` : ''})`
-      );
-    });
-
-    // Log diff efficiency metrics
-    console.log("\n📊 Stage 2 Diff Efficiency Analysis:");
-    console.log(`  Total Patches: ${totalPatches}`);
-    console.log(`  - Create: ${createPatches}`);
-    console.log(`  - Modify: ${modifyPatches}`);
-    console.log(`  - Delete: ${deletePatches}`);
-    console.log(`  Patches with Diffs: ${patchesWithDiffs}/${totalPatches} (${Math.round((patchesWithDiffs/totalPatches)*100)}%)`);
-    console.log(`  Total Diff Hunks: ${totalDiffHunks}`);
-    console.log(`  Total Diff Lines: ${totalDiffLines}`);
-    console.log(`  Unified Diffs: ${totalUnifiedDiffs}/${modifyPatches} (${modifyPatches > 0 ? Math.round((totalUnifiedDiffs/modifyPatches)*100) : 0}%)`);
-    
-    if (totalDiffHunks > 0) {
-      console.log(`  Avg Lines per Hunk: ${Math.round(totalDiffLines/totalDiffHunks)}`);
-    }
-    
-    if (patchesWithDiffs > 0) {
-      console.log(`  Avg Hunks per Patch: ${Math.round(totalDiffHunks/patchesWithDiffs)}`);
-    }
-
-    // Calculate efficiency score
-    const diffEfficiency = patchesWithDiffs > 0 ? (totalUnifiedDiffs / patchesWithDiffs) * 100 : 0;
-    console.log(`  🎯 Diff Efficiency Score: ${Math.round(diffEfficiency)}%`);
-    
-    if (diffEfficiency >= 80) {
-      console.log(`  ✅ Excellent: Most patches use surgical diffs`);
-    } else if (diffEfficiency >= 60) {
-      console.log(`  ⚠️ Good: Some patches could be more surgical`);
-    } else {
-      console.log(`  ❌ Poor: Many patches lack diff optimization`);
-    }
-
-    // Stage 3: Code Generator
-    console.log("\n" + "=".repeat(50));
-    console.log("💻 STAGE 3: Code Generator");
-    console.log("=".repeat(50));
-
-    const codePrompt = `USER REQUEST: ${userPrompt}`;
-    console.log("📤 Sending to LLM (Stage 3):");
-    console.log(
-      "System Prompt Length:",
-      getStage3CodeGeneratorPrompt(patchPlan, intentSpec, currentFiles, isInitialGeneration).length,
-      "chars"
-    );
-    console.log("User Prompt:", codePrompt);
-    console.log(
-      "Patch Plan Summary:",
-      `${patchPlan.patches.length} patches to process`
+    const patchPlan = await executeStage2PatchPlanner(
+      userPrompt,
+      intentSpec,
+      currentFiles,
+      callLLM,
+      true, // isInitialGeneration = true
+      projectId
     );
 
-    const startTime3 = Date.now();
-    const codeResponse = await callLLM(
-      getStage3CodeGeneratorPrompt(patchPlan, intentSpec, currentFiles, isInitialGeneration),
-      codePrompt,
-      "Stage 3: Code Generator",
-      "STAGE_3_CODE_GENERATOR"
+    // Stage 3: Code Generator (Complete Files)
+    const generatedFiles = await executeStage3InitialGeneration(
+      userPrompt,
+      patchPlan,
+      intentSpec,
+      currentFiles,
+      callLLM,
+      projectId
     );
-    const endTime3 = Date.now();
-    
-    // Log Stage 3 response for debugging
-    if (projectId) {
-      logStageResponse(projectId, 'stage3-code-generator', codeResponse, {
-        systemPromptLength: getStage3CodeGeneratorPrompt(patchPlan, intentSpec, currentFiles, isInitialGeneration).length,
-        userPromptLength: codePrompt.length,
-        responseTime: endTime3 - startTime3,
-        patchPlan: patchPlan,
-        intentSpec: intentSpec
-      });
-    }
 
-    console.log("📥 Received from LLM (Stage 3):");
-    console.log("Response Length:", codeResponse.length, "chars");
-    console.log("Response Time:", endTime3 - startTime3, "ms");
-    console.log("Raw Response:", codeResponse.substring(0, 500) + "...");
-    
-    // Log Stage 3 specific metrics
-    console.log("📊 Stage 3 Metrics:");
-    console.log(`    Patches to Process: ${patchPlan.patches.length}`);
-    console.log(`    Estimated Files: ${patchPlan.patches.filter(p => p.operation === 'create').length} new, ${patchPlan.patches.filter(p => p.operation === 'modify').length} modified`);
-    console.log(`    Response Efficiency: ${codeResponse.length > 0 ? (codeResponse.length / (endTime3 - startTime3) * 1000).toFixed(2) : 'N/A'} chars/sec`);
-
-    let generatedFiles: { filename: string; content?: string; unifiedDiff?: string; operation?: string; diffHunks?: DiffHunk[] }[];
-    
-    // Use the extracted parser utility with retry logic for truncated responses
-    try {
-      generatedFiles = parseStage3CodeResponse(codeResponse);
-    } catch (error) {
-      console.error("❌ Failed to parse Stage 3 response as JSON:");
-      console.error("Raw response:", codeResponse);
-      
-      // Check if response appears to be truncated
-      if (isResponseTruncated(codeResponse)) {
-        console.log("🔄 Response appears truncated, retrying with larger token limit...");
-        
-        // Retry with increased token limit
-        const retryConfig = {
-          ...STAGE_MODEL_CONFIG.STAGE_3_CODE_GENERATOR,
-          maxTokens: Math.min(STAGE_MODEL_CONFIG.STAGE_3_CODE_GENERATOR.maxTokens * 2, 80000)
-        };
-        
-        console.log(`📈 Retrying with ${retryConfig.maxTokens} tokens (was ${STAGE_MODEL_CONFIG.STAGE_3_CODE_GENERATOR.maxTokens})`);
-        
-        const retryResponse = await callLLM(
-          getStage3CodeGeneratorPrompt(patchPlan, intentSpec, currentFiles, isInitialGeneration),
-          codePrompt,
-          "Stage 3: Code Generator (Retry)",
-          "STAGE_3_CODE_GENERATOR"
-        );
-        
-        try {
-          generatedFiles = parseStage3CodeResponse(retryResponse);
-          console.log("✅ Retry successful with larger token limit");
-          console.log("📊 Retry Metrics:");
-          console.log(`    Retry Response Length: ${retryResponse.length} chars`);
-          console.log(`    Retry Token Limit: ${retryConfig.maxTokens} tokens`);
-          console.log(`    Retry Success Rate: 100%`);
-        } catch (retryError) {
-          console.error("❌ Retry also failed:", retryError);
-          console.log("📊 Retry Failure Metrics:");
-          console.log(`    Retry Response Length: ${retryResponse.length} chars`);
-          console.log(`    Retry Token Limit: ${retryConfig.maxTokens} tokens`);
-          console.log(`    Retry Success Rate: 0%`);
-          throw new Error(
-            `Stage 3 JSON parsing failed even with retry: ${
-              retryError instanceof Error ? retryError.message : String(retryError)
-            }`
-          );
-        }
-      } else {
-        throw new Error(
-          `Stage 3 JSON parsing failed: ${
-            error instanceof Error ? error.message : String(error)
-          }`
-        );
-      }
-    }
-
-    // Validate generated files structure
-    if (!Array.isArray(generatedFiles)) {
-      throw new Error("Stage 3 response is not an array");
-    }
-
-    // Validate each file object
-    generatedFiles.forEach((file, index) => {
-      if (!file || typeof file !== "object") {
-        throw new Error(`Stage 3 file ${index + 1} is not a valid object`);
-      }
-      if (!file.filename || typeof file.filename !== "string") {
-        throw new Error(`Stage 3 file ${index + 1} missing 'filename' field`);
-      }
-      // For diff-based files, content might not be present if it's a modification with unifiedDiff
-      if (file.operation === 'create' && (!file.content || typeof file.content !== "string")) {
-        throw new Error(`Stage 3 file ${index + 1} (create) missing 'content' field`);
-      }
-      if (file.operation === 'modify' && !file.unifiedDiff && !file.content) {
-        throw new Error(`Stage 3 file ${index + 1} (modify) missing both 'unifiedDiff' and 'content' fields`);
-      }
-      // For files without operation specified, require content
-      if (!file.operation && (!file.content || typeof file.content !== "string")) {
-        throw new Error(`Stage 3 file ${index + 1} missing 'content' field`);
-      }
-    });
-
-    // Analyze Stage 3 code generation efficiency
-    let totalFiles = 0;
-    let createFilesStage3 = 0;
-    let modifyFilesStage3 = 0;
-    let deleteFilesStage3 = 0;
-    let filesWithDiffsStage3 = 0;
-    let filesWithContentStage3 = 0;
-    let totalContentLength = 0;
-    let totalDiffLength = 0;
-
-    generatedFiles.forEach((file) => {
-      totalFiles++;
-      
-      if (file.operation === 'create') createFilesStage3++;
-      else if (file.operation === 'modify') modifyFilesStage3++;
-      else if (file.operation === 'delete') deleteFilesStage3++;
-
-      if (file.unifiedDiff) {
-        filesWithDiffsStage3++;
-        totalDiffLength += file.unifiedDiff.length;
-      }
-
-      if (file.content) {
-        filesWithContentStage3++;
-        totalContentLength += file.content.length;
-      }
-    });
-
-    console.log("✅ Stage 3 complete - Generated Files:");
-    console.log("  Total Files:", totalFiles);
-    console.log(`  - Create: ${createFilesStage3}`);
-    console.log(`  - Modify: ${modifyFilesStage3}`);
-    console.log(`  - Delete: ${deleteFilesStage3}`);
-    console.log(`  Files with Diffs: ${filesWithDiffsStage3}/${totalFiles} (${Math.round((filesWithDiffsStage3/totalFiles)*100)}%)`);
-    console.log(`  Files with Content: ${filesWithContentStage3}/${totalFiles} (${Math.round((filesWithContentStage3/totalFiles)*100)}%)`);
-    
-    if (filesWithDiffsStage3 > 0) {
-      console.log(`  Avg Diff Length: ${Math.round(totalDiffLength/filesWithDiffsStage3)} chars`);
-    }
-    
-    if (filesWithContentStage3 > 0) {
-      console.log(`  Avg Content Length: ${Math.round(totalContentLength/filesWithContentStage3)} chars`);
-    }
-
-    // Enhanced diff statistics using getDiffStatistics
-    try {
-      const filesWithDiffsForStats = generatedFiles
-        .filter(file => file.unifiedDiff)
-        .map(file => ({
-          filename: file.filename,
-          content: file.content || '',
-          diff: {
-            filename: file.filename,
-            hunks: [], // Will be populated by parseUnifiedDiff if needed
-            unifiedDiff: file.unifiedDiff!
-          }
-        }));
-      
-      if (filesWithDiffsForStats.length > 0) {
-        const diffStats = getDiffStatistics(filesWithDiffsForStats);
-        console.log("\n📊 Enhanced Diff Statistics:");
-        console.log(`  Total Additions: ${diffStats.totalAdditions} lines`);
-        console.log(`  Total Deletions: ${diffStats.totalDeletions} lines`);
-        console.log(`  Total Hunks: ${diffStats.totalHunks}`);
-        console.log(`  Net Change: ${diffStats.totalAdditions - diffStats.totalDeletions} lines`);
-      }
-    } catch (error) {
-      console.log("⚠️ Could not generate enhanced diff statistics:", error);
-    }
-
-    // Calculate code generation efficiency
-    const diffUsage = totalFiles > 0 ? (filesWithDiffsStage3 / totalFiles) * 100 : 0;
-    console.log(`  🎯 Code Generation Efficiency: ${Math.round(diffUsage)}%`);
-    
-    if (diffUsage >= 70) {
-      console.log(`  ✅ Excellent: Most files use surgical diffs`);
-    } else if (diffUsage >= 40) {
-      console.log(`  ⚠️ Good: Some files could use more surgical diffs`);
-    } else {
-      console.log(`  ❌ Poor: Many files use full content instead of diffs`);
-    }
-
-    // Log individual files
-    generatedFiles.forEach((file, index) => {
-      const contentLength = file.content ? file.content.length : 
-                           file.unifiedDiff ? file.unifiedDiff.length : 0;
-      const operation = file.operation || 'unknown';
-      const diffInfo = file.unifiedDiff ? `, ${file.unifiedDiff.length} diff chars` : '';
-      console.log(
-        `  File ${index + 1}: ${file.filename} (${operation}, ${contentLength} chars${diffInfo})`
-      );
-    });
-
-    // Stage 4: Validation & Self-Debug
-    console.log("\n" + "=".repeat(50));
-    console.log("🔍 STAGE 4: Validation & Self-Debug");
-    console.log("=".repeat(50));
-
-    const validation = validateGeneratedFiles(generatedFiles);
-    const importValidation = validateImportsAndReferences(
+    // Stage 4: Validator (Complete Files)
+    const validatedFiles = await executeStage4InitialValidation(
       generatedFiles,
-      currentFiles
+      currentFiles,
+      callLLM,
+      projectId
     );
-    const clientDirectiveValidation = validateClientDirectives(generatedFiles);
-    const typescriptValidation = validateTypeScriptIssues(generatedFiles);
-    const reactValidation = validateReactIssues(generatedFiles);
 
-    console.log("🔍 Validation Results:");
-    console.log("  Files Valid:", validation.isValid);
-    console.log("  Missing Files:", validation.missingFiles);
-    console.log("  Imports Valid:", importValidation.hasAllImports);
-    console.log("  Missing Imports:", importValidation.missingImports.length);
-    console.log(
-      "  Missing 'use client' directive:",
-      clientDirectiveValidation.missingClientDirective.length
-    );
-    console.log("  TypeScript Errors:", typescriptValidation.typeErrors.length);
-    console.log("  React Errors:", reactValidation.reactErrors.length);
-
-    let validFiles = generatedFiles;
-    let invalidFiles = [];
-
-    // Enhanced validation check - be more conservative about what constitutes errors
-    // Only flag files as invalid if they have critical errors that would prevent compilation
-    const hasValidationErrors =
-      !validation.isValid ||
-      (importValidation.missingImports.length > 0 &&
-        generatedFiles.length > 0) ||
-      clientDirectiveValidation.missingClientDirective.length > 0 ||
-      typescriptValidation.typeErrors.length > 0 ||
-      reactValidation.reactErrors.length > 0;
-
-    // Add detailed logging for validation decisions
-    console.log("🔍 Detailed Validation Analysis:");
-    console.log(`  Files Valid: ${validation.isValid}`);
-    console.log(`  Missing Files: ${validation.missingFiles.length}`);
-    console.log(`  Missing Imports: ${importValidation.missingImports.length}`);
-    console.log(`  Missing Client Directives: ${clientDirectiveValidation.missingClientDirective.length}`);
-    console.log(`  TypeScript Errors: ${typescriptValidation.typeErrors.length}`);
-    console.log(`  React Errors: ${reactValidation.reactErrors.length}`);
-    
-    // Log specific errors for debugging
-    if (importValidation.missingImports.length > 0) {
-      console.log("  Missing Import Details:", importValidation.missingImports);
-    }
-    if (clientDirectiveValidation.missingClientDirective.length > 0) {
-      console.log("  Missing Client Directive Details:", clientDirectiveValidation.missingClientDirective);
-    }
-    if (typescriptValidation.typeErrors.length > 0) {
-      console.log("  TypeScript Error Details:", typescriptValidation.typeErrors);
-    }
-    if (reactValidation.reactErrors.length > 0) {
-      console.log("  React Error Details:", reactValidation.reactErrors);
-    }
-
-    // CRITICAL: Prevent double generation by being more conservative about when to run Stage 4
-    // Only run Stage 4 if there are actual validation errors that would prevent compilation
-    // For initial generation, only run Stage 4 if there are critical errors, not for all files
-    const shouldRunStage4 = hasValidationErrors;
-    
-    if (shouldRunStage4) {
-      if (isInitialGeneration) {
-        console.log("📝 Initial generation - running Stage 4 validation on all files");
-      } else {
-        console.log("⚠️ Validation failed, attempting fixes...");
-        console.log("🔍 Stage 4 trigger details:");
-        console.log(`  - isInitialGeneration: ${isInitialGeneration}`);
-        console.log(`  - hasValidationErrors: ${hasValidationErrors}`);
-        console.log(`  - validation.isValid: ${validation.isValid}`);
-        console.log(`  - missingImports: ${importValidation.missingImports.length}`);
-        console.log(`  - missingClientDirective: ${clientDirectiveValidation.missingClientDirective.length}`);
-        console.log(`  - typeErrors: ${typescriptValidation.typeErrors.length}`);
-        console.log(`  - reactErrors: ${reactValidation.reactErrors.length}`);
-      }
-      
-      const errors = [
-        ...validation.missingFiles.map((f) => f), // Already formatted as error messages
-        ...importValidation.missingImports.map(
-          (m) => `Missing import in ${m.file}: ${m.missingImport}`
-        ),
-        ...clientDirectiveValidation.missingClientDirective.map(
-          (m) => `Missing 'use client' directive in ${m.file}: ${m.reason}`
-        ),
-        ...typescriptValidation.typeErrors.map(
-          (t) => `TypeScript error in ${t.file}: ${t.error}`
-        ),
-        ...reactValidation.reactErrors.map(
-          (r) => `React error in ${r.file}: ${r.error}`
-        ),
-      ];
-
-      console.log("📋 Errors to fix:", errors.length);
-
-      console.log("🔍 Analyzing files for validation...");
-      generatedFiles.forEach((file) => {
-        const hasMissingImport = importValidation.missingImports.some(
-          (m) => m.file === file.filename
-        );
-        const isMissingFile = validation.missingFiles.some((f) =>
-          f.includes(file.filename)
-        );
-        const isMissingClientDirective =
-          clientDirectiveValidation.missingClientDirective.some(
-            (m) => m.file === file.filename
-          );
-        const hasTypeScriptError = typescriptValidation.typeErrors.some(
-          (t) => t.file === file.filename
-        );
-        const hasReactError = reactValidation.reactErrors.some(
-          (r) => r.file === file.filename
-        );
-
-        console.log(
-          `  ${file.filename}: missingImport=${hasMissingImport}, missingFile=${isMissingFile}, missingClient=${isMissingClientDirective}, typescriptError=${hasTypeScriptError}, reactError=${hasReactError}`
-        );
-      });
-
-      if (isInitialGeneration) {
-        // For initial generation, only send files with critical errors to Stage 4
-        console.log("📝 Initial generation - only sending files with critical errors to Stage 4");
-        
-        // Filter files with critical errors for initial generation too
-        validFiles = generatedFiles.filter((file) => {
-          const isMissingFile = validation.missingFiles.some((f) =>
-            f.includes(file.filename)
-          );
-          const isMissingClientDirective =
-            clientDirectiveValidation.missingClientDirective.some(
-              (m) => m.file === file.filename
-            );
-          const hasTypeScriptError = typescriptValidation.typeErrors.some(
-            (t) => t.file === file.filename
-          );
-          const hasReactError = reactValidation.reactErrors.some(
-            (r) => r.file === file.filename
-          );
-
-          // Only keep files that don't have critical compilation errors
-          const hasCriticalError = isMissingFile || 
-                                  isMissingClientDirective || 
-                                  hasTypeScriptError || 
-                                  hasReactError;
-          
-          return !hasCriticalError;
-        });
-
-        invalidFiles = generatedFiles.filter((file) => {
-          const isMissingFile = validation.missingFiles.some((f) =>
-            f.includes(file.filename)
-          );
-          const isMissingClientDirective =
-            clientDirectiveValidation.missingClientDirective.some(
-              (m) => m.file === file.filename
-            );
-          const hasTypeScriptError = typescriptValidation.typeErrors.some(
-            (t) => t.file === file.filename
-          );
-          const hasReactError = reactValidation.reactErrors.some(
-            (r) => r.file === file.filename
-          );
-
-          // Only mark as invalid if there are critical compilation errors
-          const hasCriticalError = isMissingFile || 
-                                  isMissingClientDirective || 
-                                  hasTypeScriptError || 
-                                  hasReactError;
-          
-          return hasCriticalError;
-        }).map(file => ({
-          filename: file.filename,
-          content: file.content || '' // Ensure content is always a string
-        }));
-      } else {
-        // For follow-up changes, only send files with critical errors
-        console.log("🔧 Follow-up changes - only sending files with critical errors to Stage 4");
-        
-        // Enhanced file filtering - be more conservative about what gets regenerated
-        // Only regenerate files with critical errors that would prevent compilation
-        validFiles = generatedFiles.filter((file) => {
-          const isMissingFile = validation.missingFiles.some((f) =>
-            f.includes(file.filename)
-          );
-          const isMissingClientDirective =
-            clientDirectiveValidation.missingClientDirective.some(
-              (m) => m.file === file.filename
-            );
-          const hasTypeScriptError = typescriptValidation.typeErrors.some(
-            (t) => t.file === file.filename
-          );
-          const hasReactError = reactValidation.reactErrors.some(
-            (r) => r.file === file.filename
-          );
-
-          // Only keep files that don't have critical compilation errors
-          // Missing imports might be false positives for diff files, so be more conservative
-          const hasCriticalError = isMissingFile || 
-                                  isMissingClientDirective || // Always flag missing 'use client' directive
-                                  hasTypeScriptError || // Always flag TypeScript errors
-                                  hasReactError; // Always flag React errors
-          
-          return !hasCriticalError;
-        });
-
-        invalidFiles = generatedFiles.filter((file) => {
-          const isMissingFile = validation.missingFiles.some((f) =>
-            f.includes(file.filename)
-          );
-          const isMissingClientDirective =
-            clientDirectiveValidation.missingClientDirective.some(
-              (m) => m.file === file.filename
-            );
-          const hasTypeScriptError = typescriptValidation.typeErrors.some(
-            (t) => t.file === file.filename
-          );
-          const hasReactError = reactValidation.reactErrors.some(
-            (r) => r.file === file.filename
-          );
-
-          // Only mark as invalid if there are critical compilation errors
-          const hasCriticalError = isMissingFile || 
-                                  isMissingClientDirective || // Always flag missing 'use client' directive
-                                  hasTypeScriptError || // Always flag TypeScript errors
-                                  hasReactError; // Always flag React errors
-          
-          return hasCriticalError;
-        }).map(file => ({
-          filename: file.filename,
-          content: file.content || '' // Ensure content is always a string
-        }));
-      }
-
-      console.log("📁 Files to keep:", validFiles.length);
-      validFiles.forEach((file) => console.log(`  ✅ Keep: ${file.filename}`));
-
-      console.log("📁 Files to regenerate:", invalidFiles.length);
-      invalidFiles.forEach((file) =>
-        console.log(`  🔄 Regenerate: ${file.filename}`)
-      );
-
-      // Only rewrite files if there are actually invalid files with content
-      const filesWithContent = invalidFiles.filter(f => f.content && f.content.trim().length > 0);
-      const emptyFiles = invalidFiles.filter(f => !f.content || f.content.trim().length === 0);
-      
-      if (emptyFiles.length > 0) {
-        console.warn(`⚠️ Stage 4 skipping ${emptyFiles.length} empty files: ${emptyFiles.map(f => f.filename).join(', ')}`);
-        console.warn(`⚠️ This indicates Stage 3 diff application failed - Stage 4 cannot fix empty files`);
-      }
-      
-      // CRITICAL: Prevent double generation by not running Stage 4 if no files need fixing
-      if (filesWithContent.length === 0) {
-        console.log("✅ No files with content to rewrite - skipping Stage 4 to prevent double generation");
-        console.log(`⚠️ Note: ${emptyFiles.length} empty files were skipped (Stage 3 diff application failed)`);
-        generatedFiles = validFiles;
-      } else if (filesWithContent.length > 0) {
-        console.log(`🔄 Rewriting ${filesWithContent.length} invalid files using LLM...`);
-        const rewrittenFiles = await callLLM(
-          getStage4ValidatorPrompt(filesWithContent, errors, isInitialGeneration),
-          "Stage 4: Validation & Self-Debug",
-          "STAGE_4_VALIDATOR"
-        );
-
-        // Log Stage 4 response for debugging
-        if (projectId) {
-          logStageResponse(projectId, 'stage4-validator', rewrittenFiles, {
-            systemPromptLength: getStage4ValidatorPrompt(filesWithContent, errors, isInitialGeneration).length,
-            userPromptLength: 0, // Stage 4 doesn't use a user prompt
-            responseTime: 0, // We don't have timing info here
-            invalidFiles: filesWithContent,
-            errors: errors
-          });
-        }
-
-        // Parse rewritten files with robust JSON parsing
-        let rewrittenFilesParsed: { filename: string; content: string; unifiedDiff?: string; diffHunks?: DiffHunk[] }[];
-        
-        // Use the extracted parser utility
-        try {
-          rewrittenFilesParsed = parseStage4ValidatorResponse(rewrittenFiles);
-        } catch (error) {
-          console.error("❌ Failed to parse rewritten files as JSON:");
-          console.error("Raw response:", rewrittenFiles.substring(0, 500));
-          throw new Error(
-            `Stage 4 JSON parsing failed: ${
-              error instanceof Error ? error.message : String(error)
-            }`
-          );
-        }
-
-        // Validate that Stage 4 returned the correct files
-        const expectedFilenames = new Set(filesWithContent.map((f) => f.filename));
-        const returnedFilenames = new Set(
-          rewrittenFilesParsed.map((f) => f.filename)
-        );
-
-        console.log("🔍 Stage 4 validation check:");
-        console.log(
-          `  Expected files: ${Array.from(expectedFilenames).join(", ")}`
-        );
-        console.log(
-          `  Returned files: ${Array.from(returnedFilenames).join(", ")}`
-        );
-
-        const missingFiles = Array.from(expectedFilenames).filter(
-          (f) => !returnedFilenames.has(f)
-        );
-        const extraFiles = Array.from(returnedFilenames).filter(
-          (f) => !expectedFilenames.has(f)
-        );
-
-        if (missingFiles.length > 0) {
-          console.warn(`⚠️ Stage 4 missing files: ${missingFiles.join(", ")}`);
-        }
-        if (extraFiles.length > 0) {
-          console.warn(`⚠️ Stage 4 extra files: ${extraFiles.join(", ")}`);
-        }
-
-        // Combine valid and rewritten files
-        // For initial generation: Stage 4 returns complete corrected files
-        // For follow-up changes: Stage 4 returns surgical diff patches for critical fixes
-        if (missingFiles.length > 0) {
-          console.warn(
-            "⚠️ Stage 4 didn't return all expected files, keeping original files"
-          );
-          const fallbackFiles = filesWithContent.filter((f) =>
-            missingFiles.includes(f.filename)
-          );
-          generatedFiles = [
-            ...validFiles,
-            ...rewrittenFilesParsed,
-            ...fallbackFiles,
-          ];
-        } else {
-          generatedFiles = [...validFiles, ...rewrittenFilesParsed];
-        }
-
-        console.log("📊 Final file combination:");
-        console.log(`  Valid files kept: ${validFiles.length}`);
-        console.log(`  Rewritten files: ${rewrittenFilesParsed.length}`);
-        console.log(
-          `  Fallback files: ${missingFiles.length > 0 ? missingFiles.length : 0}`
-        );
-        console.log(`  Total final files: ${generatedFiles.length}`);
-
-        // Remove duplicates by filename (keep the last occurrence)
-        const uniqueFiles = new Map<
-          string,
-          { filename: string; content?: string; unifiedDiff?: string; operation?: string; diffHunks?: DiffHunk[] }
-        >();
-        generatedFiles.forEach((file) => {
-          uniqueFiles.set(file.filename, file);
-        });
-        generatedFiles = Array.from(uniqueFiles.values());
-
-        console.log(`  After deduplication: ${generatedFiles.length} files`);
-      } else {
-        console.log("✅ No files with content to rewrite - keeping all generated files");
-        console.log(`⚠️ Note: ${emptyFiles.length} empty files were skipped (Stage 3 diff application failed)`);
-        generatedFiles = validFiles;
-      }
-    } else {
-      console.log("✅ No validation errors found - keeping all generated files");
-      // Keep all generated files if no validation errors
-      generatedFiles = validFiles;
-    }
-
-    console.log("✅ Stage 4 complete - Final Files:");
-    console.log("  Total Files:", generatedFiles.length);
-    generatedFiles.forEach((file, index) => {
-      const contentLength = file.content ? file.content.length : 
-                           file.unifiedDiff ? file.unifiedDiff.length : 0;
-      const operation = file.operation || 'unknown';
-      console.log(
-        `  File ${index + 1}: ${file.filename} (${operation}, ${contentLength} chars)`
-      );
-    });
-
-    // Final Summary with Efficiency Analysis
     console.log("\n" + "=".repeat(50));
-    console.log("🎉 PIPELINE COMPLETED SUCCESSFULLY!");
+    console.log("🎉 INITIAL GENERATION PIPELINE COMPLETED!");
     console.log("=".repeat(50));
-    
-    // Calculate overall efficiency metrics
-    const totalTime = Date.now() - startTime1;
-    const finalFiles = generatedFiles.length;
-    const finalFilesWithDiffs = generatedFiles.filter(f => f.unifiedDiff).length;
-    const finalFilesWithContent = generatedFiles.filter(f => f.content).length;
-    const finalCreateFiles = generatedFiles.filter(f => f.operation === 'create').length;
-    const finalModifyFiles = generatedFiles.filter(f => f.operation === 'modify').length;
-    
-    const overallDiffEfficiency = finalFiles > 0 ? (finalFilesWithDiffs / finalFiles) * 100 : 0;
-    const surgicalModificationRate = finalModifyFiles > 0 ? (finalFilesWithDiffs / finalModifyFiles) * 100 : 0;
-    
-    console.log("📊 Final Summary:");
-    console.log("  Total Files Generated:", finalFiles);
-    console.log("  - Create:", finalCreateFiles);
-    console.log("  - Modify:", finalModifyFiles);
-    console.log("  Files with Diffs:", finalFilesWithDiffs, `(${Math.round(overallDiffEfficiency)}%)`);
-    console.log("  Files with Content:", finalFilesWithContent);
-    console.log("  Total Time:", totalTime, "ms");
-    
-    console.log("\n🎯 Overall Efficiency Metrics:");
-    console.log(`  Diff Efficiency: ${Math.round(overallDiffEfficiency)}%`);
-    console.log(`  Surgical Modification Rate: ${Math.round(surgicalModificationRate)}%`);
-    console.log(`  Avg Time per File: ${Math.round(totalTime / finalFiles)}ms`);
-    
-    if (overallDiffEfficiency >= 70) {
-      console.log("  ✅ Excellent: High diff efficiency achieved");
-    } else if (overallDiffEfficiency >= 40) {
-      console.log("  ⚠️ Good: Moderate diff efficiency");
-    } else {
-      console.log("  ❌ Poor: Low diff efficiency - consider optimization");
-    }
-    
-    console.log("  Files:", generatedFiles.map((f) => f.filename).join(", "));
+    console.log(`📁 Generated ${validatedFiles.length} files`);
 
-    // Convert generated files to required format with content field
-    let processedFiles: { filename: string; content: string }[] = [];
-    
-    // Separate files with diffs from files with content (for both initial and follow-up)
-    const filesWithDiffs = generatedFiles.filter(file => file.operation === 'modify' && file.unifiedDiff);
-    const filesWithContent = generatedFiles.filter(file => file.operation === 'create' && file.content);
-    
-    if (isInitialGeneration) {
-      // For initial generation, use all files as complete content (no diffs)
-      console.log("📝 Initial generation - using complete file content");
-      processedFiles = generatedFiles.map(file => ({
-        filename: file.filename,
-        content: file.content || ''
-      }));
-    } else {
-      // For follow-up changes, apply diffs
-      
-      // Log the separation for debugging
-      console.log(`📊 File processing breakdown:`);
-      console.log(`  Files with diffs: ${filesWithDiffs.length}`);
-      console.log(`  Files with content: ${filesWithContent.length}`);
-      console.log(`  Total generated files: ${generatedFiles.length}`);
-      
-      // Apply diffs to original files using the robust applyDiffsToFiles function
-      if (filesWithDiffs.length > 0) {
-        console.log(`🔄 Applying diffs to ${filesWithDiffs.length} files...`);
-      
-      // Convert unified diffs to FileDiff format for applyDiffsToFiles
-      const diffs = filesWithDiffs.map(file => {
-        const originalFile = currentFiles.find(f => f.filename === file.filename);
-        
-        console.log(`🔍 Processing file: ${file.filename}`);
-        console.log(`🔍 File has unifiedDiff: ${!!file.unifiedDiff}`);
-        console.log(`🔍 File has diffHunks: ${!!file.diffHunks}`);
-        console.log(`🔍 unifiedDiff length: ${file.unifiedDiff?.length || 0}`);
-        console.log(`🔍 diffHunks length: ${file.diffHunks?.length || 0}`);
-        
-        // Use diffHunks directly if available, otherwise parse unifiedDiff
-        let hunks: DiffHunk[] = [];
-        try {
-          hunks = parseUnifiedDiff(file.unifiedDiff!);
-          console.log(`📊 Parsed ${hunks.length} hunks for ${file.filename}`);
-          
-          // Validate diff before attempting to apply
-          if (hunks.length === 0) {
-            console.warn(`⚠️ No valid hunks found in diff for ${file.filename}, skipping diff application`);
-            return null; // Skip this diff
-          }
-          
-          // Check if diff is too large (potential full rewrite)
-          // Calculate the maximum of oldLines vs newLines per hunk to avoid double counting
-          const totalChanges = hunks.reduce((sum, hunk) => sum + Math.max(hunk.oldLines, hunk.newLines), 0);
-          const fileLineCount = originalFile ? originalFile.content.split('\n').length : 0;
-          
-          // Only skip if the diff is truly massive (more than 150% of original file size)
-          // This allows for legitimate feature additions while preventing full rewrites
-          if (originalFile && totalChanges > fileLineCount * 1.5) {
-            console.warn(`⚠️ Diff for ${file.filename} is extremely large (${totalChanges} changes vs ${fileLineCount} lines, ${Math.round(totalChanges/fileLineCount*100)}%), might be a full rewrite - skipping`);
-            return null; // Skip this diff
-          } else if (originalFile && totalChanges > fileLineCount * 0.8) {
-            console.log(`ℹ️ Large diff for ${file.filename} (${totalChanges} changes vs ${fileLineCount} lines, ${Math.round(totalChanges/fileLineCount*100)}%) - proceeding with caution`);
-          }
-          
-        } catch (error) {
-          console.error(`❌ Failed to parse unified diff for ${file.filename}:`, error);
-          return null; // Skip this diff
-        }
-        
-        if (!originalFile) {
-          console.warn(`⚠️ Original file not found for ${file.filename}, treating as new file`);
-          // For new files, we'll use the diff content as the file content
-          return {
-            filename: file.filename,
-            hunks: hunks,
-            unifiedDiff: file.unifiedDiff!
-          };
-        }
-        
-        return {
-          filename: file.filename,
-          hunks: hunks,
-          unifiedDiff: file.unifiedDiff!
-        };
-      }).filter(diff => diff !== null); // Filter out skipped diffs
-      
-      try {
-        const filesWithAppliedDiffs = applyDiffsToFiles(currentFiles, diffs);
-        processedFiles.push(...filesWithAppliedDiffs);
-        console.log(`✅ Successfully applied diffs to ${filesWithAppliedDiffs.length} files`);
-      } catch (error) {
-        console.error('❌ Failed to apply diffs using applyDiffsToFiles:', error);
-        // Fallback to individual diff application
-        filesWithDiffs.forEach(file => {
-          const originalFile = currentFiles.find(f => f.filename === file.filename);
-          if (originalFile) {
-            try {
-              const appliedContent = applyDiffToContent(originalFile.content, file.unifiedDiff!);
-              processedFiles.push({
-                filename: file.filename,
-                content: appliedContent
-              });
-            } catch (diffError) {
-              console.error(`❌ Failed to apply diff to ${file.filename}:`, diffError);
-              console.warn(`⚠️ Skipping ${file.filename} due to diff application failure - this prevents boilerplate contamination`);
-            }
-          } else {
-            // This shouldn't happen with the new filtering logic
-            console.warn(`⚠️ File ${file.filename} not found in current files but has operation: ${file.operation || 'unknown'}`);
-          }
-        });
-      }
-      }
-    }
-    
-    // Add files that already have content (including create operations) - for both initial and follow-up
-    if (filesWithContent.length > 0) {
-      console.log(`📝 Adding ${filesWithContent.length} files with content...`);
-      filesWithContent.forEach(file => {
-        console.log(`  ✅ Adding file: ${file.filename} (${file.content!.length} chars)`);
-        processedFiles.push({
-          filename: file.filename,
-          content: file.content!
-        });
-      });
-    }
-    
-    console.log(`📊 Final processed files: ${processedFiles.length}`);
-    processedFiles.forEach(file => {
-      console.log(`  📄 ${file.filename} (${file.content.length} chars)`);
-    });
-    
-    return { files: processedFiles, intentSpec };
+    return { files: validatedFiles, intentSpec };
   } catch (error) {
-    console.error("❌ Multi-stage pipeline failed:");
+    console.error("❌ Initial generation pipeline failed:");
     console.error("  Error:", error);
     console.error(
       "  Stack:",
@@ -2754,6 +2080,546 @@ export async function executeMultiStagePipeline(
   }
 }
 
+// ========================================================================
+// FOLLOW-UP CHANGES PIPELINE (Diff-Based)
+// ========================================================================
+
+/**
+ * Pipeline for follow-up changes to existing projects
+ * Generates surgical diffs instead of complete files
+ */
+export async function executeFollowUpPipeline(
+  userPrompt: string,
+  currentFiles: { filename: string; content: string }[],
+  callLLM: (
+    systemPrompt: string,
+    userPrompt: string,
+    stageName: string,
+    stageType?: keyof typeof STAGE_MODEL_CONFIG
+  ) => Promise<string>,
+  projectId?: string
+): Promise<{ files: { filename: string; content: string }[]; intentSpec: IntentSpec }> {
+  try {
+    console.log("🚀 Starting FOLLOW-UP CHANGES pipeline...");
+    console.log("📝 User Prompt:", userPrompt);
+    console.log("📁 Current Files Count:", currentFiles.length);
+
+    // Stage 1: Intent Parser
+    const intentSpec = await executeStage1IntentParser(userPrompt, callLLM, projectId);
+
+    // Check if changes are needed
+    if (!intentSpec.needsChanges) {
+      console.log("\n" + "=".repeat(50));
+      console.log("✅ NO CHANGES NEEDED");
+      console.log("=".repeat(50));
+      console.log("📋 Reason:", intentSpec.reason);
+      console.log("📁 Returning", currentFiles.length, "unchanged files");
+      return { files: currentFiles, intentSpec };
+    }
+
+    // Stage 2: Patch Planner (with diffs)
+    const patchPlan = await executeStage2PatchPlanner(
+      userPrompt,
+      intentSpec,
+      currentFiles,
+      callLLM,
+      false, // isInitialGeneration = false
+      projectId
+    );
+
+    // Stage 3: Code Generator (Diffs)
+    const filesWithDiffs = await executeStage3FollowUpGeneration(
+      userPrompt,
+      patchPlan,
+      intentSpec,
+      currentFiles,
+      callLLM,
+      projectId
+    );
+
+    // Stage 4: Validator (Diffs)
+    const validatedFiles = await executeStage4FollowUpValidation(
+      filesWithDiffs,
+      currentFiles,
+      callLLM,
+      projectId
+    );
+
+    console.log("\n" + "=".repeat(50));
+    console.log("🎉 FOLLOW-UP PIPELINE COMPLETED!");
+    console.log("=".repeat(50));
+    console.log(`📁 Generated ${validatedFiles.length} files`);
+
+    return { files: validatedFiles, intentSpec };
+  } catch (error) {
+    console.error("❌ Follow-up pipeline failed:");
+    console.error("  Error:", error);
+    console.error(
+      "  Stack:",
+      error instanceof Error ? error.stack : "No stack trace"
+    );
+    throw error;
+  }
+}
+
+// ========================================================================
+// STAGE 3 & 4 IMPLEMENTATIONS
+// ========================================================================
+
+/**
+ * Stage 3: Code Generator for Initial Generation
+ * Generates complete file contents
+ */
+async function executeStage3InitialGeneration(
+  userPrompt: string,
+  patchPlan: PatchPlan,
+  intentSpec: IntentSpec,
+  currentFiles: { filename: string; content: string }[],
+  callLLM: (
+    systemPrompt: string,
+    userPrompt: string,
+    stageName: string,
+    stageType?: keyof typeof STAGE_MODEL_CONFIG
+  ) => Promise<string>,
+  projectId?: string
+): Promise<{ filename: string; content: string }[]> {
+  console.log("\n" + "=".repeat(50));
+  console.log("💻 STAGE 3: Code Generator (Initial Generation)");
+  console.log("=".repeat(50));
+
+  const codePrompt = `USER REQUEST: ${userPrompt}`;
+  console.log("📤 Sending to LLM (Stage 3):");
+  console.log(
+    "System Prompt Length:",
+    getStage3CodeGeneratorPrompt(patchPlan, intentSpec, currentFiles, true).length,
+    "chars"
+  );
+
+  const startTime3 = Date.now();
+  const codeResponse = await callLLM(
+    getStage3CodeGeneratorPrompt(patchPlan, intentSpec, currentFiles, true),
+    codePrompt,
+    "Stage 3: Code Generator",
+    "STAGE_3_CODE_GENERATOR"
+  );
+  const endTime3 = Date.now();
+  
+  // Log Stage 3 response
+  if (projectId) {
+    logStageResponse(projectId, 'stage3-code-generator', codeResponse, {
+      systemPromptLength: getStage3CodeGeneratorPrompt(patchPlan, intentSpec, currentFiles, true).length,
+      userPromptLength: codePrompt.length,
+      responseTime: endTime3 - startTime3,
+      patchPlan: patchPlan,
+      intentSpec: intentSpec
+    });
+  }
+
+  console.log("📥 Received from LLM (Stage 3):");
+  console.log("Response Length:", codeResponse.length, "chars");
+  console.log("Response Time:", endTime3 - startTime3, "ms");
+
+  const generatedFiles = parseStage3CodeResponse(codeResponse);
+
+  // Validate generated files structure
+  if (!Array.isArray(generatedFiles)) {
+    throw new Error("Stage 3 response is not an array");
+  }
+
+  // Convert to simple format for initial generation
+  const completeFiles: { filename: string; content: string }[] = generatedFiles.map(file => ({
+    filename: file.filename,
+    content: file.content || ''
+  }));
+
+  console.log(`✅ Stage 3 complete - Generated ${completeFiles.length} complete files`);
+  
+  return completeFiles;
+}
+
+/**
+ * Stage 3: Code Generator for Follow-Up Changes
+ * Generates diffs and applies them to existing files
+ */
+async function executeStage3FollowUpGeneration(
+  userPrompt: string,
+  patchPlan: PatchPlan,
+  intentSpec: IntentSpec,
+  currentFiles: { filename: string; content: string }[],
+  callLLM: (
+    systemPrompt: string,
+    userPrompt: string,
+    stageName: string,
+    stageType?: keyof typeof STAGE_MODEL_CONFIG
+  ) => Promise<string>,
+  projectId?: string
+): Promise<{ filename: string; content: string }[]> {
+  console.log("\n" + "=".repeat(50));
+  console.log("💻 STAGE 3: Code Generator (Follow-Up Changes - Diff-Based)");
+  console.log("=".repeat(50));
+
+  const codePrompt = `USER REQUEST: ${userPrompt}`;
+  console.log("📤 Sending to LLM (Stage 3):");
+  console.log(
+    "System Prompt Length:",
+    getStage3CodeGeneratorPrompt(patchPlan, intentSpec, currentFiles, false).length,
+    "chars"
+  );
+
+  const startTime3 = Date.now();
+  const codeResponse = await callLLM(
+    getStage3CodeGeneratorPrompt(patchPlan, intentSpec, currentFiles, false),
+    codePrompt,
+    "Stage 3: Code Generator",
+    "STAGE_3_CODE_GENERATOR"
+  );
+  const endTime3 = Date.now();
+  
+  // Log Stage 3 response
+  if (projectId) {
+    logStageResponse(projectId, 'stage3-code-generator', codeResponse, {
+      systemPromptLength: getStage3CodeGeneratorPrompt(patchPlan, intentSpec, currentFiles, false).length,
+      userPromptLength: codePrompt.length,
+      responseTime: endTime3 - startTime3,
+      patchPlan: patchPlan,
+      intentSpec: intentSpec
+    });
+  }
+
+  console.log("📥 Received from LLM (Stage 3):");
+  console.log("Response Length:", codeResponse.length, "chars");
+  console.log("Response Time:", endTime3 - startTime3, "ms");
+
+  const generatedFiles = parseStage3CodeResponse(codeResponse);
+
+  // Process files: apply diffs for modifications, use content for new files
+  const filesWithDiffs = generatedFiles.filter(file => file.operation === 'modify' && file.unifiedDiff);
+  const filesWithContent = generatedFiles.filter(file => file.operation === 'create' && file.content);
+
+  console.log(`📊 File processing breakdown:`);
+  console.log(`  Files with diffs: ${filesWithDiffs.length}`);
+  console.log(`  Files with content: ${filesWithContent.length}`);
+
+  const processedFiles: { filename: string; content: string }[] = [];
+
+  // Apply diffs to existing files
+  if (filesWithDiffs.length > 0) {
+    console.log(`🔄 Applying diffs to ${filesWithDiffs.length} files...`);
+    
+    const diffs = filesWithDiffs.map(file => {
+      const hunks = parseUnifiedDiff(file.unifiedDiff!);
+      return {
+        filename: file.filename,
+        hunks: hunks,
+        unifiedDiff: file.unifiedDiff!
+      };
+    }).filter(diff => diff.hunks.length > 0);
+
+    const filesWithAppliedDiffs = applyDiffsToFiles(currentFiles, diffs);
+    processedFiles.push(...filesWithAppliedDiffs);
+    console.log(`✅ Successfully applied diffs to ${filesWithAppliedDiffs.length} files`);
+  }
+
+  // Add new files with complete content
+  if (filesWithContent.length > 0) {
+    console.log(`📝 Adding ${filesWithContent.length} new files...`);
+    filesWithContent.forEach(file => {
+      processedFiles.push({
+        filename: file.filename,
+        content: file.content!
+      });
+    });
+  }
+
+  console.log(`✅ Stage 3 complete - Generated ${processedFiles.length} files`);
+  
+  return processedFiles;
+}
+
+/**
+ * Stage 4: Validator for Initial Generation
+ * Validates and fixes complete files
+ */
+async function executeStage4InitialValidation(
+  generatedFiles: { filename: string; content: string }[],
+  currentFiles: { filename: string; content: string }[],
+  callLLM: (
+    systemPrompt: string,
+    userPrompt: string,
+    stageName: string,
+    stageType?: keyof typeof STAGE_MODEL_CONFIG
+  ) => Promise<string>,
+  projectId?: string
+): Promise<{ filename: string; content: string }[]> {
+  console.log("\n" + "=".repeat(50));
+  console.log("🔍 STAGE 4: Validation (Initial Generation)");
+  console.log("=".repeat(50));
+
+  const validation = validateGeneratedFiles(generatedFiles);
+  const importValidation = validateImportsAndReferences(generatedFiles, currentFiles);
+  const clientDirectiveValidation = validateClientDirectives(generatedFiles);
+  const typescriptValidation = validateTypeScriptIssues(generatedFiles);
+  const reactValidation = validateReactIssues(generatedFiles);
+
+  console.log("🔍 Validation Results:");
+  console.log("  Files Valid:", validation.isValid);
+  console.log("  Missing Imports:", importValidation.missingImports.length);
+  console.log("  Missing 'use client' directive:", clientDirectiveValidation.missingClientDirective.length);
+  console.log("  TypeScript Errors:", typescriptValidation.typeErrors.length);
+  console.log("  React Errors:", reactValidation.reactErrors.length);
+
+  const hasValidationErrors =
+    !validation.isValid ||
+    clientDirectiveValidation.missingClientDirective.length > 0 ||
+    typescriptValidation.typeErrors.length > 0 ||
+    reactValidation.reactErrors.length > 0;
+
+  if (!hasValidationErrors) {
+    console.log("✅ No validation errors - files are valid");
+    return generatedFiles;
+  }
+
+  console.log("⚠️ Validation errors found - applying fixes...");
+
+  const errors = [
+    ...validation.missingFiles.map((f) => f),
+    ...clientDirectiveValidation.missingClientDirective.map(
+      (m) => `Missing 'use client' directive in ${m.file}: ${m.reason}`
+    ),
+    ...typescriptValidation.typeErrors.map(
+      (t) => `TypeScript error in ${t.file}: ${t.error}`
+    ),
+    ...reactValidation.reactErrors.map(
+      (r) => `React error in ${r.file}: ${r.error}`
+    ),
+  ];
+
+  // Filter files with errors
+  const invalidFiles = generatedFiles.filter((file) => {
+    const isMissingFile = validation.missingFiles.some((f) =>
+      f.includes(file.filename)
+    );
+    const isMissingClientDirective =
+      clientDirectiveValidation.missingClientDirective.some(
+        (m) => m.file === file.filename
+      );
+    const hasTypeScriptError = typescriptValidation.typeErrors.some(
+      (t) => t.file === file.filename
+    );
+    const hasReactError = reactValidation.reactErrors.some(
+      (r) => r.file === file.filename
+    );
+
+    return isMissingFile || isMissingClientDirective || hasTypeScriptError || hasReactError;
+  });
+
+  const validFiles = generatedFiles.filter(file => !invalidFiles.includes(file));
+
+  if (invalidFiles.length === 0) {
+    return generatedFiles;
+  }
+
+  console.log(`🔄 Rewriting ${invalidFiles.length} invalid files...`);
+  
+  const rewrittenFiles = await callLLM(
+    getStage4ValidatorPrompt(invalidFiles, errors, true),
+    "Stage 4: Validation & Self-Debug",
+    "STAGE_4_VALIDATOR"
+  );
+
+  if (projectId) {
+    logStageResponse(projectId, 'stage4-validator', rewrittenFiles, {
+      systemPromptLength: getStage4ValidatorPrompt(invalidFiles, errors, true).length,
+      invalidFiles: invalidFiles,
+      errors: errors
+    });
+  }
+
+  const rewrittenFilesParsed = parseStage4ValidatorResponse(rewrittenFiles);
+
+  console.log(`✅ Stage 4 complete - Fixed ${rewrittenFilesParsed.length} files`);
+
+  return [...validFiles, ...rewrittenFilesParsed];
+}
+
+/**
+ * Stage 4: Validator for Follow-Up Changes
+ * Validates and fixes diff-based changes
+ */
+async function executeStage4FollowUpValidation(
+  generatedFiles: { filename: string; content: string }[],
+  currentFiles: { filename: string; content: string }[],
+  callLLM: (
+    systemPrompt: string,
+    userPrompt: string,
+    stageName: string,
+    stageType?: keyof typeof STAGE_MODEL_CONFIG
+  ) => Promise<string>,
+  projectId?: string
+): Promise<{ filename: string; content: string }[]> {
+  console.log("\n" + "=".repeat(50));
+  console.log("🔍 STAGE 4: Validation (Follow-Up Changes)");
+  console.log("=".repeat(50));
+
+  const validation = validateGeneratedFiles(generatedFiles);
+  const importValidation = validateImportsAndReferences(generatedFiles, currentFiles);
+  const clientDirectiveValidation = validateClientDirectives(generatedFiles);
+  const typescriptValidation = validateTypeScriptIssues(generatedFiles);
+  const reactValidation = validateReactIssues(generatedFiles);
+
+  console.log("🔍 Validation Results:");
+  console.log("  Files Valid:", validation.isValid);
+  console.log("  Missing Imports:", importValidation.missingImports.length);
+  console.log("  Missing 'use client' directive:", clientDirectiveValidation.missingClientDirective.length);
+  console.log("  TypeScript Errors:", typescriptValidation.typeErrors.length);
+  console.log("  React Errors:", reactValidation.reactErrors.length);
+
+  const hasValidationErrors =
+    !validation.isValid ||
+    clientDirectiveValidation.missingClientDirective.length > 0 ||
+    typescriptValidation.typeErrors.length > 0 ||
+    reactValidation.reactErrors.length > 0;
+
+  if (!hasValidationErrors) {
+    console.log("✅ No validation errors - files are valid");
+    return generatedFiles;
+  }
+
+  console.log("⚠️ Validation errors found - applying surgical fixes...");
+
+  const errors = [
+    ...validation.missingFiles.map((f) => f),
+    ...clientDirectiveValidation.missingClientDirective.map(
+      (m) => `Missing 'use client' directive in ${m.file}: ${m.reason}`
+    ),
+    ...typescriptValidation.typeErrors.map(
+      (t) => `TypeScript error in ${t.file}: ${t.error}`
+    ),
+    ...reactValidation.reactErrors.map(
+      (r) => `React error in ${r.file}: ${r.error}`
+    ),
+  ];
+
+  // Filter files with errors
+  const invalidFiles = generatedFiles.filter((file) => {
+    const isMissingFile = validation.missingFiles.some((f) =>
+      f.includes(file.filename)
+    );
+    const isMissingClientDirective =
+      clientDirectiveValidation.missingClientDirective.some(
+        (m) => m.file === file.filename
+      );
+    const hasTypeScriptError = typescriptValidation.typeErrors.some(
+      (t) => t.file === file.filename
+    );
+    const hasReactError = reactValidation.reactErrors.some(
+      (r) => r.file === file.filename
+    );
+
+    return isMissingFile || isMissingClientDirective || hasTypeScriptError || hasReactError;
+  });
+
+  if (invalidFiles.length === 0) {
+    return generatedFiles;
+  }
+
+  console.log(`🔄 Applying surgical fixes to ${invalidFiles.length} invalid files...`);
+  
+  const rewrittenFiles = await callLLM(
+    getStage4ValidatorPrompt(invalidFiles, errors, false),
+    "Stage 4: Validation & Self-Debug",
+    "STAGE_4_VALIDATOR"
+  );
+
+  if (projectId) {
+    logStageResponse(projectId, 'stage4-validator', rewrittenFiles, {
+      systemPromptLength: getStage4ValidatorPrompt(invalidFiles, errors, false).length,
+      invalidFiles: invalidFiles,
+      errors: errors
+    });
+  }
+
+  const rewrittenFilesParsed = parseStage4ValidatorResponse(rewrittenFiles);
+
+  // For follow-up validation, we need to apply diffs to get complete files
+  const fixedFiles: { filename: string; content: string }[] = [];
+  
+  for (const file of rewrittenFilesParsed) {
+    if (file.unifiedDiff && file.diffHunks) {
+      // This is a diff-based fix, apply it to the current file
+      const currentFile = generatedFiles.find(f => f.filename === file.filename);
+      if (currentFile) {
+        try {
+          const updatedContent = applyDiffToContent(currentFile.content, file.unifiedDiff);
+          fixedFiles.push({
+            filename: file.filename,
+            content: updatedContent
+          });
+        } catch (error) {
+          console.warn(`⚠️ Failed to apply diff for ${file.filename}, using original content:`, error);
+          fixedFiles.push({
+            filename: file.filename,
+            content: currentFile.content
+          });
+        }
+      } else {
+        console.warn(`⚠️ Could not find current file for ${file.filename}, skipping diff application`);
+      }
+    } else if (file.content) {
+      // This is a complete file fix
+      fixedFiles.push({
+        filename: file.filename,
+        content: file.content
+      });
+    }
+  }
+
+  console.log(`✅ Stage 4 complete - Fixed ${fixedFiles.length} files`);
+
+  // Replace the invalid files with the fixed ones
+  const finalFiles = generatedFiles.map(file => {
+    const fixedFile = fixedFiles.find(f => f.filename === file.filename);
+    return fixedFile || file;
+  });
+
+  return finalFiles;
+}
+
+// ========================================================================
+// LEGACY UNIFIED PIPELINE (Backward Compatibility)
+// ========================================================================
+
+/**
+ * @deprecated Use executeInitialGenerationPipeline or executeFollowUpPipeline instead
+ * Legacy unified pipeline maintained for backward compatibility
+ */
+export async function executeMultiStagePipeline(
+  userPrompt: string,
+  currentFiles: { filename: string; content: string }[],
+  callLLM: (
+    systemPrompt: string,
+    userPrompt: string,
+    stageName: string,
+    stageType?: keyof typeof STAGE_MODEL_CONFIG
+  ) => Promise<string>,
+  projectId?: string,
+  isInitialGeneration: boolean = false
+): Promise<{ files: { filename: string; content: string }[]; intentSpec: IntentSpec }> {
+  // Delegate to the appropriate specialized pipeline
+  console.log("⚠️ Using legacy executeMultiStagePipeline - consider using specialized pipelines");
+  
+  if (isInitialGeneration) {
+    return executeInitialGenerationPipeline(userPrompt, currentFiles, callLLM, projectId);
+  } else {
+    return executeFollowUpPipeline(userPrompt, currentFiles, callLLM, projectId);
+  }
+}
+
+// ========================================================================
+// HELPER FUNCTIONS
+// ========================================================================
+
+// Helper function to log LLM calls with timing (Legacy - not used in new pipelines)
 // Helper function to log LLM calls with timing
 export async function callLLMWithLogging(
   systemPrompt: string,

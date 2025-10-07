@@ -1,4 +1,9 @@
-import { executeMultiStagePipeline, STAGE_MODEL_CONFIG, ContextGatheringResult } from './llmOptimizer';
+import {
+  executeInitialGenerationPipeline,
+  executeFollowUpPipeline,
+  STAGE_MODEL_CONFIG,
+  ContextGatheringResult
+} from './llmOptimizer';
 import { gatherContextWithTools } from './toolExecutionService';
 import { generateDiff, applyDiffToContent, validateDiff, FileDiff, DiffHunk } from './diffUtils';
 
@@ -65,14 +70,23 @@ export async function executeEnhancedPipeline(
     console.log("- Tool calls:", contextResult.toolCalls?.length || 0);
     console.log("- Context data length:", contextData.length);
 
-    // Step 2: Execute the main pipeline with enhanced files
-    const pipelineResult = await executeMultiStagePipeline(
-      userPrompt,
-      enhancedFiles,
-      callLLM,
-      projectId,
-      isInitialGeneration
-    );
+    // Step 2: Execute the appropriate specialized pipeline
+    let pipelineResult;
+    if (isInitialGeneration) {
+      pipelineResult = await executeInitialGenerationPipeline(
+        userPrompt,
+        enhancedFiles,
+        callLLM,
+        projectId
+      );
+    } else {
+      pipelineResult = await executeFollowUpPipeline(
+        userPrompt,
+        enhancedFiles,
+        callLLM,
+        projectId
+      );
+    }
 
     const generatedFiles = pipelineResult.files;
 

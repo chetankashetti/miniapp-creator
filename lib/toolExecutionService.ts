@@ -84,19 +84,56 @@ export async function executeToolCalls(
       // Fix working directory and args for common tools
       let fixedToolCall = { ...toolCall };
       
-      // Fix common path issues for all tools
+      // Fix common path issues for specific tools
       if (toolCall.args.length > 0) {
         const workingDir = toolCall.workingDirectory || '.';
-        const fixedArgs = toolCall.args.map(arg => {
-          // If the argument is a file path that starts with the working directory, make it relative
-          if (arg.startsWith(workingDir + '/')) {
-            return arg.substring(workingDir.length + 1);
-          }
-          // If the argument is just the working directory name (like 'src'), keep it as is
-          return arg;
-        });
         
-        // Check if any args were changed
+        // Handle different tools with specific path resolution logic
+        let fixedArgs = [...toolCall.args];
+        
+        if (toolCall.tool === 'grep') {
+          // For grep: pattern, files/directories
+          // Don't modify the pattern (first arg), only file paths (remaining args)
+          if (fixedArgs.length > 1) {
+            fixedArgs = [
+              fixedArgs[0], // Keep pattern as-is
+              ...fixedArgs.slice(1).map(arg => {
+                // For grep targets, handle directory vs file paths differently
+                if (arg === workingDir) {
+                  // If searching entire working directory, use '.'
+                  return '.';
+                } else if (arg.startsWith(workingDir + '/')) {
+                  // If it's a file within working directory, make it relative
+                  return arg.substring(workingDir.length + 1);
+                } else {
+                  // Otherwise keep as-is (might be absolute or already relative)
+                  return arg;
+                }
+              })
+            ];
+          }
+        } else if (['cat', 'head', 'tail', 'wc'].includes(toolCall.tool)) {
+          // For file reading tools: only fix file paths
+          fixedArgs = toolCall.args.map(arg => {
+            if (arg.startsWith(workingDir + '/')) {
+              return arg.substring(workingDir.length + 1);
+            }
+            return arg;
+          });
+        } else if (['find', 'ls', 'tree'].includes(toolCall.tool)) {
+          // For directory listing tools: handle directory paths
+          fixedArgs = toolCall.args.map(arg => {
+            if (arg === workingDir) {
+              return '.';
+            } else if (arg.startsWith(workingDir + '/')) {
+              return arg.substring(workingDir.length + 1);
+            }
+            return arg;
+          });
+        }
+        // For unknown tools, don't modify args to avoid breaking them
+        
+        // Apply fixes if any changes were made
         if (JSON.stringify(fixedArgs) !== JSON.stringify(toolCall.args)) {
           fixedToolCall = {
             ...toolCall,

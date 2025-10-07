@@ -7,9 +7,9 @@ import {
   PatchPlan,
   FileDiff,
   getStage0ContextGathererPrompt,
-  executeMultiStagePipeline
+  executeFollowUpPipeline
 } from './llmOptimizer';
-import { applyDiffHunks, validateDiff } from './diffUtils';
+import { applyDiffHunks, validateDiff, validateDiffHunksAgainstFile } from './diffUtils';
 import { executeToolCalls } from './toolExecutionService';
 
 export interface DiffBasedResult {
@@ -99,14 +99,13 @@ export async function executeDiffBasedPipeline(
     }
   }
 
-  // Use the multi-stage pipeline with diff-based prompts (isInitialGeneration = false)
-  console.log('🔄 Using multi-stage pipeline for diff-based changes');
-  const pipelineResult = await executeMultiStagePipeline(
+  // Use the specialized follow-up pipeline for diff-based changes
+  console.log('🔄 Using specialized follow-up pipeline for diff-based changes');
+  const pipelineResult = await executeFollowUpPipeline(
     userPrompt,
     currentFiles,
     callLLM,
-    projectId,
-    false // isInitialGeneration = false for follow-up changes
+    projectId
   );
 
   const generatedFilesFromPipeline = pipelineResult.files;
@@ -173,9 +172,44 @@ export function applyDiffsToFiles(
     console.log('Processing diff for:', diff.filename);
     
     if (currentContent[diff.filename] !== undefined) {
-      // File exists - apply diff to current content
+      // File exists - validate diff before applying
+      const validation = validateDiffHunksAgainstFile(
+        diff.filename,
+        currentContent[diff.filename],
+        diff.hunks
+      );
+      
+        if (!validation.isValid) {
+          console.warn(`⚠️ Diff validation failed for ${diff.filename}:`);
+          validation.errors.forEach(error => console.warn(`   - ${error}`));
+          console.warn(`   Attempting to apply diff with warnings...`);
+
+          // Try to apply diff anyway but catch errors
+          try {
+            const newContent = applyDiffHunks(currentContent[diff.filename], diff.hunks);
+            console.log('✅ Diff applied successfully despite validation warnings');
+            result.push({
+              filename: diff.filename,
+              content: newContent
+            });
+            modifiedFiles.add(diff.filename);
+            continue;
+          } catch (error) {
+            console.warn(`❌ Diff application failed: ${error instanceof Error ? error.message : String(error)}`);
+            console.warn(`   Using original content as fallback`);
+            // Add original content without changes as fallback
+            result.push({
+              filename: diff.filename,
+              content: currentContent[diff.filename]
+            });
+            modifiedFiles.add(diff.filename);
+            continue;
+          }
+        }
+      
+      // Apply diff to current content
       try {
-        console.log('Applying diff hunks:', diff.hunks);
+        console.log('✅ Diff validation passed, applying diff hunks:', diff.hunks);
         const newContent = applyDiffHunks(currentContent[diff.filename], diff.hunks);
         
         // Only add to result if content actually changed from original
