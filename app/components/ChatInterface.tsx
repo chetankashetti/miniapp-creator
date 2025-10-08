@@ -150,7 +150,7 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
         };
 
         loadChatMessages();
-    }, [currentProject?.projectId, sessionToken]); // Removed problematic dependencies that cause infinite loops
+    }, [currentProject, sessionToken, currentPhase, chat.length, aiLoading]); // Added missing dependencies
 
     // Show warning message once when user hasn't started chatting
     useEffect(() => {
@@ -313,6 +313,7 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
             // AI message will be saved to database by the chat API
 
             // Check if we should transition to building phase
+            // Only allow generation in requirements phase and if generation hasn't been triggered yet
             if (currentPhase === 'requirements' && !hasTriggeredGeneration) {
                 const aiResponseLower = aiResponse.toLowerCase();
                 const isConfirmedByText = aiResponseLower.includes('proceed to build') ||
@@ -337,6 +338,16 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
                         handleGenerateProject(aiResponse);
                     }, 1000);
                 }
+            } else {
+                // Log why generation is not allowed
+                const phase = currentPhase as 'requirements' | 'building' | 'editing';
+                if (phase === 'editing') {
+                    console.log('📝 In editing phase - generation not allowed, only file modifications');
+                } else if (phase === 'building' && hasTriggeredGeneration) {
+                    console.log('⚠️ Generation already triggered - preventing duplicate generation');
+                } else if (hasTriggeredGeneration) {
+                    console.log('⚠️ Generation already triggered - preventing duplicate generation');
+                }
             }
         } catch (err) {
             console.error('Error:', err);
@@ -360,9 +371,9 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
     };
 
     const handleGenerateProject = async (generationPrompt: string) => {
-        if (!generationPrompt.trim() || !sessionToken || isGenerating) {
+        if (!generationPrompt.trim() || !sessionToken || isGenerating || hasTriggeredGeneration) {
             // setError('Please enter a prompt');
-            console.log('⚠️ Skipping project generation: invalid prompt, no session token, or already generating');
+            console.log('⚠️ Skipping project generation: invalid prompt, no session token, already generating, or generation already triggered');
             return;
         }
         console.log('🚀 Starting project generation...');
@@ -426,9 +437,10 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
             onProjectGenerated(project);
             setCurrentPhase('editing');
             
-            // Reset generation flag after successful generation
-            setHasTriggeredGeneration(false);
-            setGenerationFlag(false);
+            // Keep generation flag set to prevent duplicate generations
+            // Once a project is generated, we should not allow further generation
+            // setHasTriggeredGeneration(false);
+            // setGenerationFlag(false);
 
             // Add generation success message to chat
             const aiMessage = project.generatedFiles && project.generatedFiles.length > 0
