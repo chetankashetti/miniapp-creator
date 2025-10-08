@@ -11,6 +11,7 @@ import {
   isResponseTruncated 
 } from './parserUtils';
 import { CompilationValidator, CompilationResult, CompilationError, CompilationErrorUtils } from './compilationValidator';
+import { createRailwayValidationClient, RailwayValidationResult, RailwayValidationError } from './railwayValidationClient';
 
 // Debug logging utilities
 const createDebugLogDir = (projectId: string): string => {
@@ -2093,7 +2094,7 @@ async function executeStage3FollowUpGeneration(
 
 /**
  * Stage 4: Compilation Validator for Initial Generation
- * Validates and fixes complete files using comprehensive compilation validation
+ * Validates and fixes complete files using Railway's full compilation validation
  */
 async function executeStage4InitialValidation(
   generatedFiles: { filename: string; content: string }[],
@@ -2114,7 +2115,53 @@ async function executeStage4InitialValidation(
   console.log(`  - Current files: ${currentFiles.length}`);
   console.log(`  - Project ID: ${projectId || 'None'}`);
 
-  console.log("\n🔧 Initializing CompilationValidator...");
+  // Try Railway validation first (full validation)
+  try {
+    console.log("\n🚂 Attempting Railway validation (full compilation)...");
+    const railwayClient = createRailwayValidationClient();
+    
+    // Check if Railway validation is available
+    const isRailwayAvailable = await railwayClient.checkHealth();
+    if (isRailwayAvailable) {
+      console.log("✅ Railway validation available - using full compilation validation");
+      
+      const railwayResult = await railwayClient.validateProject(
+        projectId || `validation-${Date.now()}`,
+        generatedFiles,
+        {
+          enableTypeScript: true,
+          enableSolidity: true,
+          enableESLint: true,
+          enableBuild: true,
+          enableRuntimeChecks: true
+        }
+      );
+
+      console.log("\n📊 Railway Validation Results Summary:");
+      console.log("  ✅ Success:", railwayResult.success);
+      console.log("  ❌ Errors:", railwayResult.errors.length);
+      console.log("  ⚠️  Warnings:", railwayResult.warnings.length);
+      console.log("  ℹ️  Info:", railwayResult.info.length);
+      console.log("  ⏱️  Compilation Time:", railwayResult.compilationTime, "ms");
+      console.log("  📋 Validation Summary:", railwayResult.validationSummary);
+
+      if (railwayResult.success) {
+        console.log("\n🎉 Railway validation successful - files are valid!");
+        console.log(`📁 Returning ${railwayResult.files.length} validated files`);
+        return railwayResult.files;
+      }
+
+      console.log("\n⚠️ Railway validation found errors - proceeding to error fixing...");
+      return await fixRailwayCompilationErrors(railwayResult, callLLM, projectId, true);
+    } else {
+      console.log("⚠️ Railway validation not available - falling back to local validation");
+    }
+  } catch (railwayError) {
+    console.warn("⚠️ Railway validation failed - falling back to local validation:", railwayError);
+  }
+
+  // Fallback to local validation (limited in serverless)
+  console.log("\n🔧 Falling back to local CompilationValidator...");
   const validator = new CompilationValidator(process.cwd());
   
   // Convert to the format expected by CompilationValidator
@@ -2126,13 +2173,13 @@ async function executeStage4InitialValidation(
   }));
   console.log(`  ✅ Converted ${filesForValidation.length} files for validation`);
 
-  console.log("\n🚀 Starting compilation validation...");
+  console.log("\n🚀 Starting local compilation validation...");
   const compilationResult = await validator.validateProject(
     filesForValidation,
     currentFiles
   );
 
-  console.log("\n📊 Compilation Results Summary:");
+  console.log("\n📊 Local Compilation Results Summary:");
   console.log("  ✅ Success:", compilationResult.success);
   console.log("  ❌ Errors:", compilationResult.errors.length);
   console.log("  ⚠️  Warnings:", compilationResult.warnings.length);
@@ -2141,18 +2188,18 @@ async function executeStage4InitialValidation(
   console.log("  📋 Validation Summary:", compilationResult.validationSummary);
 
   if (compilationResult.success) {
-    console.log("\n🎉 Compilation successful - files are valid!");
+    console.log("\n🎉 Local validation successful - files are valid!");
     console.log(`📁 Returning ${compilationResult.files.length} validated files`);
     return compilationResult.files;
   }
 
-  console.log("\n⚠️ Compilation errors found - proceeding to error fixing...");
+  console.log("\n⚠️ Local validation found errors - proceeding to error fixing...");
   return await fixCompilationErrors(compilationResult, callLLM, projectId, true);
 }
 
 /**
  * Stage 4: Compilation Validator for Follow-Up Changes
- * Validates and fixes diff-based changes using comprehensive compilation validation
+ * Validates and fixes diff-based changes using Railway's full compilation validation
  */
 async function executeStage4FollowUpValidation(
   generatedFiles: { filename: string; content: string }[],
@@ -2173,7 +2220,53 @@ async function executeStage4FollowUpValidation(
   console.log(`  - Current files: ${currentFiles.length}`);
   console.log(`  - Project ID: ${projectId || 'None'}`);
 
-  console.log("\n🔧 Initializing CompilationValidator...");
+  // Try Railway validation first (full validation)
+  try {
+    console.log("\n🚂 Attempting Railway validation (full compilation)...");
+    const railwayClient = createRailwayValidationClient();
+    
+    // Check if Railway validation is available
+    const isRailwayAvailable = await railwayClient.checkHealth();
+    if (isRailwayAvailable) {
+      console.log("✅ Railway validation available - using full compilation validation");
+      
+      const railwayResult = await railwayClient.validateProject(
+        projectId || `validation-${Date.now()}`,
+        generatedFiles,
+        {
+          enableTypeScript: true,
+          enableSolidity: true,
+          enableESLint: true,
+          enableBuild: true,
+          enableRuntimeChecks: true
+        }
+      );
+
+      console.log("\n📊 Railway Validation Results Summary:");
+      console.log("  ✅ Success:", railwayResult.success);
+      console.log("  ❌ Errors:", railwayResult.errors.length);
+      console.log("  ⚠️  Warnings:", railwayResult.warnings.length);
+      console.log("  ℹ️  Info:", railwayResult.info.length);
+      console.log("  ⏱️  Compilation Time:", railwayResult.compilationTime, "ms");
+      console.log("  📋 Validation Summary:", railwayResult.validationSummary);
+
+      if (railwayResult.success) {
+        console.log("\n🎉 Railway validation successful - files are valid!");
+        console.log(`📁 Returning ${railwayResult.files.length} validated files`);
+        return railwayResult.files;
+      }
+
+      console.log("\n⚠️ Railway validation found errors - proceeding to surgical error fixing...");
+      return await fixRailwayCompilationErrors(railwayResult, callLLM, projectId, false);
+    } else {
+      console.log("⚠️ Railway validation not available - falling back to local validation");
+    }
+  } catch (railwayError) {
+    console.warn("⚠️ Railway validation failed - falling back to local validation:", railwayError);
+  }
+
+  // Fallback to local validation (limited in serverless)
+  console.log("\n🔧 Falling back to local CompilationValidator...");
   const validator = new CompilationValidator(process.cwd());
   
   // Convert to the format expected by CompilationValidator
@@ -2187,13 +2280,13 @@ async function executeStage4FollowUpValidation(
   }));
   console.log(`  ✅ Converted ${filesForValidation.length} files for validation`);
 
-  console.log("\n🚀 Starting compilation validation...");
+  console.log("\n🚀 Starting local compilation validation...");
   const compilationResult = await validator.validateProject(
     filesForValidation,
     currentFiles
   );
 
-  console.log("\n📊 Compilation Results Summary:");
+  console.log("\n📊 Local Compilation Results Summary:");
   console.log("  ✅ Success:", compilationResult.success);
   console.log("  ❌ Errors:", compilationResult.errors.length);
   console.log("  ⚠️  Warnings:", compilationResult.warnings.length);
@@ -2202,15 +2295,231 @@ async function executeStage4FollowUpValidation(
   console.log("  📋 Validation Summary:", compilationResult.validationSummary);
 
   if (compilationResult.success) {
-    console.log("\n🎉 Compilation successful - files are valid!");
+    console.log("\n🎉 Local validation successful - files are valid!");
     console.log(`📁 Returning ${compilationResult.files.length} validated files`);
     return compilationResult.files;
   }
 
-  console.log("\n⚠️ Compilation errors found - proceeding to surgical error fixing...");
+  console.log("\n⚠️ Local validation found errors - proceeding to surgical error fixing...");
   return await fixCompilationErrors(compilationResult, callLLM, projectId, false);
 }
 
+
+/**
+ * Fix Railway compilation errors using LLM-based error correction
+ */
+async function fixRailwayCompilationErrors(
+  railwayResult: RailwayValidationResult,
+  callLLM: (
+    systemPrompt: string,
+    userPrompt: string,
+    stageName: string,
+    stageType?: keyof typeof STAGE_MODEL_CONFIG
+  ) => Promise<string>,
+  projectId?: string,
+  isInitialGeneration: boolean = false
+): Promise<{ filename: string; content: string }[]> {
+  console.log("\n" + "=".repeat(60));
+  console.log("🔧 STAGE 4: Railway Compilation Error Fixing Process");
+  console.log("=".repeat(60));
+  console.log(`📊 Input Summary:`);
+  console.log(`  - Total files: ${railwayResult.files.length}`);
+  console.log(`  - Railway errors: ${railwayResult.errors.length}`);
+  console.log(`  - Railway warnings: ${railwayResult.warnings.length}`);
+  console.log(`  - Railway info: ${railwayResult.info.length}`);
+  console.log(`  - Is Initial Generation: ${isInitialGeneration}`);
+  
+  // Use only Railway errors
+  console.log("\n🔍 Step 1: Processing Railway compilation errors...");
+  const allErrors = railwayResult.errors;
+  console.log(`  ✅ Total errors to process: ${allErrors.length}`);
+  
+  // Group errors by file for easier processing
+  console.log("\n🔍 Step 2: Grouping errors by file...");
+  const errorsByFile = new Map<string, RailwayValidationError[]>();
+  for (const error of allErrors) {
+    if (!errorsByFile.has(error.file)) {
+      errorsByFile.set(error.file, []);
+    }
+    errorsByFile.get(error.file)!.push(error);
+  }
+  console.log(`  ✅ Errors grouped into ${errorsByFile.size} files`);
+  
+  // Debug: Log error files and available files
+  console.log("\n🔍 Step 3: File matching analysis...");
+  console.log("  📋 Error files:", Array.from(errorsByFile.keys()));
+  console.log("  📋 Available files:", railwayResult.files.map(f => f.filename));
+  
+  // Get files that need fixing - try multiple matching strategies
+  console.log("\n🔍 Step 4: Finding files that need fixing...");
+  let filesToFix = railwayResult.files.filter(file => 
+    errorsByFile.has(file.filename)
+  );
+  console.log(`  📊 Exact matches found: ${filesToFix.length} files`);
+
+  // If no exact matches, try to match by basename or relative path
+  if (filesToFix.length === 0) {
+    console.log("  🔍 No exact filename matches found, trying alternative matching strategies...");
+    
+    // Try matching by basename (filename without path)
+    console.log("  🔍 Attempting basename matching...");
+    const errorBasenames = new Map<string, RailwayValidationError[]>();
+    for (const [errorFile, errors] of errorsByFile.entries()) {
+      const basename = path.basename(errorFile);
+      if (!errorBasenames.has(basename)) {
+        errorBasenames.set(basename, []);
+      }
+      errorBasenames.get(basename)!.push(...errors);
+    }
+    console.log(`  📋 Error basenames: ${Array.from(errorBasenames.keys())}`);
+    
+    filesToFix = railwayResult.files.filter(file => {
+      const fileBasename = path.basename(file.filename);
+      return errorBasenames.has(fileBasename);
+    });
+    
+    if (filesToFix.length > 0) {
+      console.log(`  ✅ Found ${filesToFix.length} files using basename matching`);
+      console.log(`  📋 Matched files: ${filesToFix.map(f => f.filename)}`);
+      
+      // Update errorsByFile to use the matched filenames
+      const newErrorsByFile = new Map<string, RailwayValidationError[]>();
+      for (const file of filesToFix) {
+        const fileBasename = path.basename(file.filename);
+        const errors = errorBasenames.get(fileBasename) || [];
+        if (errors.length > 0) {
+          newErrorsByFile.set(file.filename, errors);
+          console.log(`  🔗 Mapped ${fileBasename} -> ${file.filename} (${errors.length} errors)`);
+        }
+      }
+      // Replace the original errorsByFile
+      for (const [key, value] of newErrorsByFile.entries()) {
+        errorsByFile.set(key, value);
+      }
+    } else {
+      console.log("  ❌ No basename matches found either");
+    }
+  }
+
+  if (filesToFix.length === 0) {
+    console.log("\n❌ CRITICAL: No files identified for fixing!");
+    console.log("📋 This indicates a serious issue with error parsing or file mapping");
+    console.log("📋 Error files:", Array.from(errorsByFile.keys()));
+    console.log("📋 Available files:", railwayResult.files.map(f => f.filename));
+    console.log("📋 Returning original files - manual review required");
+    return railwayResult.files;
+  }
+
+  // Create detailed error messages for LLM
+  console.log("\n🔍 Step 5: Creating error messages for LLM...");
+  const errorMessages = Array.from(errorsByFile.entries()).map(([file, errors]) => {
+    const errorList = errors.map(e => {
+      const location = e.line ? `Line ${e.line}${e.column ? `:${e.column}` : ''}` : 'Unknown location';
+      const suggestion = e.suggestion ? ` (Suggestion: ${e.suggestion})` : '';
+      return `${location}: ${e.message} (${e.category})${suggestion}`;
+    }).join('\n');
+    return `${file}:\n${errorList}`;
+  }).join('\n\n');
+
+  console.log(`  ✅ Prepared error messages for ${filesToFix.length} files`);
+  console.log(`  📋 Files to fix: ${filesToFix.map(f => f.filename)}`);
+  console.log("  📋 Error summary:");
+  filesToFix.forEach(file => {
+    const errors = errorsByFile.get(file.filename) || [];
+    console.log(`    - ${file.filename}: ${errors.length} errors`);
+  });
+
+  // Call LLM to fix errors
+  console.log("\n🤖 Step 6: Calling LLM to fix errors...");
+  console.log(`  📤 Preparing LLM prompt for ${filesToFix.length} files...`);
+  
+  const fixPrompt = getStage4CompilationFixPrompt(filesToFix, errorMessages, isInitialGeneration);
+  console.log(`  📏 Prompt length: ${fixPrompt.length} characters`);
+  console.log(`  🎯 Generation type: ${isInitialGeneration ? 'Complete files' : 'Surgical diffs'}`);
+  
+  console.log("  🚀 Calling LLM...");
+  const fixResponse = await callLLM(
+    fixPrompt,
+    "Stage 4: Railway Compilation Error Fixes",
+    "STAGE_4_VALIDATOR"
+  );
+  console.log(`  ✅ LLM response received: ${fixResponse.length} characters`);
+
+  if (projectId) {
+    console.log("  📝 Logging response for debugging...");
+    logStageResponse(projectId, 'stage4-railway-compilation-fixes', fixResponse, {
+      railwayErrors: railwayResult.errors,
+      filesToFix: filesToFix.length,
+      errorSummary: {
+        totalErrors: railwayResult.errors.length,
+        errorsByCategory: railwayResult.errors.reduce((acc, e) => {
+          acc[e.category] = (acc[e.category] || 0) + 1;
+          return acc;
+        }, {} as Record<string, number>)
+      }
+    });
+  }
+
+  // Parse and return fixed files
+  console.log("\n🔍 Step 7: Parsing LLM response...");
+  const fixedFiles = parseStage4ValidatorResponse(fixResponse);
+  console.log(`  ✅ Parsed ${fixedFiles.length} fixed files from LLM response`);
+  
+  // Merge fixed files with unchanged files
+  console.log("\n🔍 Step 8: Merging fixed and unchanged files...");
+  const unchangedFiles = railwayResult.files.filter(file => 
+    !errorsByFile.has(file.filename)
+  );
+  console.log(`  📊 Unchanged files: ${unchangedFiles.length}`);
+  console.log(`  📊 Fixed files: ${fixedFiles.length}`);
+
+  const finalFiles = [...unchangedFiles];
+  
+  // Add fixed files
+  console.log("  🔄 Processing fixed files...");
+  for (const fixedFile of fixedFiles) {
+    if (fixedFile.content) {
+      console.log(`    ✅ ${fixedFile.filename}: Complete content provided`);
+      finalFiles.push({
+        filename: fixedFile.filename,
+        content: fixedFile.content
+      });
+    } else if (fixedFile.unifiedDiff) {
+      console.log(`    🔧 ${fixedFile.filename}: Applying unified diff...`);
+      // Apply diff to get final content
+      const originalFile = railwayResult.files.find(f => f.filename === fixedFile.filename);
+      if (originalFile) {
+        try {
+          const updatedContent = applyDiffToContent(originalFile.content, fixedFile.unifiedDiff);
+          finalFiles.push({
+            filename: fixedFile.filename,
+            content: updatedContent
+          });
+          console.log(`    ✅ ${fixedFile.filename}: Diff applied successfully`);
+        } catch (error) {
+          console.warn(`    ⚠️ ${fixedFile.filename}: Failed to apply diff:`, error);
+          finalFiles.push(originalFile);
+        }
+      } else {
+        console.warn(`    ❌ ${fixedFile.filename}: Original file not found for diff application`);
+      }
+    } else {
+      console.warn(`    ⚠️ ${fixedFile.filename}: No content or diff provided`);
+    }
+  }
+
+  console.log("\n" + "=".repeat(60));
+  console.log("🎉 STAGE 4: Railway Compilation Error Fixing Complete!");
+  console.log("=".repeat(60));
+  console.log(`📊 Final Results:`);
+  console.log(`  - Total files: ${finalFiles.length}`);
+  console.log(`  - Files fixed: ${fixedFiles.length}`);
+  console.log(`  - Files unchanged: ${unchangedFiles.length}`);
+  console.log(`  - Original errors: ${railwayResult.errors.length}`);
+  console.log("=".repeat(60));
+  
+  return finalFiles;
+}
 
 /**
  * Fix compilation errors using LLM-based error correction
