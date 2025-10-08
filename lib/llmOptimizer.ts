@@ -10,6 +10,7 @@ import {
   parseStage4ValidatorResponse,
   isResponseTruncated 
 } from './parserUtils';
+import { CompilationValidator, CompilationResult, CompilationError, CompilationErrorUtils } from './compilationValidator';
 
 // Debug logging utilities
 const createDebugLogDir = (projectId: string): string => {
@@ -91,9 +92,9 @@ export const STAGE_MODEL_CONFIG = {
     reason: "Complex code generation, needs highest quality and more tokens for large projects",
   },
   STAGE_4_VALIDATOR: {
-    model: ANTHROPIC_MODELS.POWERFUL,
-    fallbackModel: ANTHROPIC_MODELS.BALANCED, // Use Haiku if Sonnet is overloaded
-    maxTokens: 20000,
+    model: ANTHROPIC_MODELS.BALANCED,
+    fallbackModel: ANTHROPIC_MODELS.POWERFUL, // Use Haiku if Sonnet is overloaded
+    maxTokens: 10000,
     temperature: 0,
     reason: "Error fixing requires good reasoning but not highest tier",
   },
@@ -1518,252 +1519,6 @@ export function validateImportsAndReferences(
   };
 }
 
-function validateClientDirectives(
-  files: { filename: string; content?: string; unifiedDiff?: string; operation?: string }[]
-): {
-  missingClientDirective: { file: string; reason: string }[];
-} {
-  const missingClientDirective: { file: string; reason: string }[] = [];
-
-  files.forEach((file) => {
-    // Skip non-React files that don't need 'use client' directive
-    const isReactFile = file.filename.endsWith('.tsx') || file.filename.endsWith('.jsx');
-    const isTypeScriptFile = file.filename.endsWith('.ts') || file.filename.endsWith('.js');
-    const isContractFile = file.filename.endsWith('.sol');
-    const isSvgFile = file.filename.endsWith('.svg');
-    const isConfigFile = file.filename.includes('config') || file.filename.includes('deploy');
-    
-    // Only check React/TypeScript files, skip contracts, SVGs, and config files
-    if (!isReactFile && !isTypeScriptFile) return;
-    if (isContractFile || isSvgFile || isConfigFile) return;
-    
-    // For modify operations, we should analyze the actual file content, not the diff
-    // The diff will be applied to create the final content, so we need to simulate that
-    let contentToAnalyze: string | undefined;
-    
-    if (file.operation === 'create' && file.content) {
-      contentToAnalyze = file.content;
-    } else if (file.operation === 'modify' && file.unifiedDiff) {
-      // For modify operations, we need to analyze the diff to see what the final content would be
-      // Extract the added lines from the diff to check for client-side features
-      const addedLines = file.unifiedDiff
-        .split('\n')
-        .filter(line => line.startsWith('+') && !line.startsWith('+++'))
-        .map(line => line.substring(1)) // Remove the + prefix
-        .join('\n');
-      
-      // If the diff contains client-side features, we need to check if 'use client' is present
-      const usesClientHooks = /useState|useEffect|useCallback|useMemo|useRef|useContext/.test(addedLines);
-      const usesEventHandlers = /onClick|onChange|onSubmit|onFocus|onBlur|onKeyDown|onKeyUp/.test(addedLines);
-      
-      if (usesClientHooks || usesEventHandlers) {
-        // Check if the diff includes 'use client' directive - FIXED REGEX
-        const hasClientDirectiveInDiff = /^'use client';?/m.test(addedLines);
-        
-        if (!hasClientDirectiveInDiff) {
-          missingClientDirective.push({
-            file: file.filename,
-            reason: "Uses client-side features but missing 'use client' directive in diff",
-          });
-        }
-      }
-      return; // Skip the rest of the analysis for modify operations
-    } else {
-      contentToAnalyze = file.content || file.unifiedDiff;
-    }
-    
-    if (!contentToAnalyze) return; // Skip if no content to analyze
-    
-    // Check for critical client-side features that definitely need 'use client' - EXPANDED PATTERNS
-    const usesClientHooks = /useState|useEffect|useCallback|useMemo|useRef|useContext|useReducer|useLayoutEffect/.test(contentToAnalyze);
-    const usesEventHandlers = /onClick|onChange|onSubmit|onFocus|onBlur|onKeyDown|onKeyUp|onMouseEnter|onMouseLeave/.test(contentToAnalyze);
-    const hasJSX = /<[A-Z][a-zA-Z]*\s*[^>]*>/g.test(contentToAnalyze);
-    
-    // FIXED REGEX - Look for the actual directive format (handle multiple occurrences)
-    const clientDirectiveMatches = contentToAnalyze.match(/^'use client';?/gm);
-    const hasClientDirective = clientDirectiveMatches && clientDirectiveMatches.length > 0;
-
-    // Only flag if it's clearly a client component
-    if ((usesClientHooks || usesEventHandlers || hasJSX) && !hasClientDirective) {
-      missingClientDirective.push({
-        file: file.filename,
-        reason: "Uses client-side features but missing 'use client' directive",
-      });
-    }
-    
-    // Check for duplicate 'use client' directives
-    if (clientDirectiveMatches && clientDirectiveMatches.length > 1) {
-      missingClientDirective.push({
-        file: file.filename,
-        reason: `Has ${clientDirectiveMatches.length} duplicate 'use client' directives - should only have one`,
-      });
-    }
-  });
-
-  return { missingClientDirective };
-}
-
-// Simplified validation for critical TypeScript issues only
-function validateTypeScriptIssues(
-  files: { filename: string; content?: string; unifiedDiff?: string; operation?: string }[]
-): {
-  typeErrors: { file: string; error: string }[];
-} {
-  const typeErrors: { file: string; error: string }[] = [];
-
-  files.forEach((file) => {
-    // Skip non-TypeScript files
-    const isTypeScriptFile = file.filename.endsWith('.ts') || file.filename.endsWith('.tsx');
-    const isContractFile = file.filename.endsWith('.sol');
-    const isSvgFile = file.filename.endsWith('.svg');
-    const isConfigFile = file.filename.includes('config') || file.filename.includes('deploy');
-    
-    // Only check TypeScript files, skip contracts, SVGs, and config files
-    if (!isTypeScriptFile) return;
-    if (isContractFile || isSvgFile || isConfigFile) return;
-    
-    // For modify operations, we should analyze the actual file content, not the diff
-    let contentToAnalyze: string | undefined;
-    
-    if (file.operation === 'create' && file.content) {
-      contentToAnalyze = file.content;
-    } else if (file.operation === 'modify' && file.unifiedDiff) {
-      // For modify operations, extract the added lines from the diff
-      const addedLines = file.unifiedDiff
-        .split('\n')
-        .filter(line => line.startsWith('+') && !line.startsWith('+++'))
-        .map(line => line.substring(1)) // Remove the + prefix
-        .join('\n');
-      
-      contentToAnalyze = addedLines;
-    } else {
-      contentToAnalyze = file.content || file.unifiedDiff;
-    }
-    
-    if (!contentToAnalyze) return; // Skip if no content to analyze
-
-    // Check for explicit 'any' types which are flagged by ESLint
-    const hasExplicitAny = /:\s*any\b/g.test(contentToAnalyze);
-    if (hasExplicitAny) {
-      typeErrors.push({
-        file: file.filename,
-        error: "Unexpected any. Specify a different type. @typescript-eslint/no-explicit-any",
-      });
-    }
-
-    // Only check for critical syntax errors that would prevent compilation
-    // Check for missing React imports when using hooks
-    const usesReactHooks = /useState|useEffect|useCallback|useMemo|useRef/.test(contentToAnalyze);
-    const hasReactImport = /import.*React.*from\s+['"`]react['"`]|import\s*{\s*[^}]*useState|useEffect/.test(contentToAnalyze);
-    
-    if (usesReactHooks && !hasReactImport) {
-      typeErrors.push({
-        file: file.filename,
-        error: "Uses React hooks but missing React import",
-      });
-    }
-
-    // Check for obvious syntax errors (more specific patterns)
-    const syntaxErrors = [
-      // Unclosed function braces (look for function declaration without closing brace)
-      /function\s+\w+\s*\([^)]*\)\s*{[^}]*$/m,
-      // Unclosed JSX tags
-      /<[A-Z][a-zA-Z]*[^>]*>[^<]*$/m,
-      // Missing semicolons in critical places
-      /const\s+\w+\s*=\s*[^;]+$/m,
-    ];
-
-    // Check for basic syntax issues
-    const hasSyntaxError = syntaxErrors.some((pattern) => {
-      const matches = contentToAnalyze.match(pattern);
-      return matches && matches.length > 0;
-    });
-
-    if (hasSyntaxError) {
-      typeErrors.push({
-        file: file.filename,
-        error: "Potential syntax error - check brackets, semicolons, imports",
-      });
-    }
-  });
-
-  return { typeErrors };
-}
-
-// Simplified validation for critical React issues only
-function validateReactIssues(files: { filename: string; content?: string; unifiedDiff?: string; operation?: string }[]): {
-  reactErrors: { file: string; error: string }[];
-} {
-  const reactErrors: { file: string; error: string }[] = [];
-
-  files.forEach((file) => {
-    // Skip non-React files that don't need React-specific validation
-    const isReactFile = file.filename.endsWith('.tsx') || file.filename.endsWith('.jsx');
-    const isTypeScriptFile = file.filename.endsWith('.ts') || file.filename.endsWith('.js');
-    const isContractFile = file.filename.endsWith('.sol');
-    const isSvgFile = file.filename.endsWith('.svg');
-    const isConfigFile = file.filename.includes('config') || file.filename.includes('deploy');
-    
-    // Only check React/TypeScript files, skip contracts, SVGs, and config files
-    if (!isReactFile && !isTypeScriptFile) return;
-    if (isContractFile || isSvgFile || isConfigFile) return;
-    
-    // For modify operations, we should analyze the actual file content, not the diff
-    let contentToAnalyze: string | undefined;
-    
-    if (file.operation === 'create' && file.content) {
-      contentToAnalyze = file.content;
-    } else if (file.operation === 'modify' && file.unifiedDiff) {
-      // For modify operations, extract the added lines from the diff
-      const addedLines = file.unifiedDiff
-        .split('\n')
-        .filter(line => line.startsWith('+') && !line.startsWith('+++'))
-        .map(line => line.substring(1)) // Remove the + prefix
-        .join('\n');
-      
-      contentToAnalyze = addedLines;
-    } else {
-      contentToAnalyze = file.content || file.unifiedDiff;
-    }
-    
-    if (!contentToAnalyze) return; // Skip if no content to analyze
-
-    // Only check for critical React issues that would prevent compilation
-    const hasJSX = /<[A-Z][a-zA-Z]*\s*[^>]*>/g.test(contentToAnalyze);
-    const hasReactHooks = /use[A-Z][a-zA-Z]*/g.test(contentToAnalyze);
-    const hasClientDirective = /"use client"/g.test(contentToAnalyze);
-
-    // Check if JSX is used without proper setup
-    if (hasJSX && !hasClientDirective && hasReactHooks) {
-      reactErrors.push({
-        file: file.filename,
-        error: "JSX with React hooks needs 'use client' directive",
-      });
-    }
-
-    // Check for React hooks rules violations
-    const hasHooksInArrayFrom = /Array\.from\([^)]*\)[^}]*use[A-Z][a-zA-Z]*/g.test(contentToAnalyze);
-    if (hasHooksInArrayFrom) {
-      reactErrors.push({
-        file: file.filename,
-        error: "React hooks cannot be called inside Array.from() - use for loops instead",
-      });
-    }
-
-    // Check for unescaped entities in JSX
-    const hasUnescapedApostrophe = /[^&]'[^;]/g.test(contentToAnalyze);
-    const hasUnescapedQuote = /[^&]"[^;]/g.test(contentToAnalyze);
-    if (hasUnescapedApostrophe || hasUnescapedQuote) {
-      reactErrors.push({
-        file: file.filename,
-        error: "Unescaped entities in JSX - use &apos; for apostrophes and &quot; for quotes",
-      });
-    }
-  });
-
-  return { reactErrors };
-}
-
 // ========================================================================
 // SHARED PIPELINE STAGES (Stage 1 & 2)
 // ========================================================================
@@ -2337,8 +2092,8 @@ async function executeStage3FollowUpGeneration(
 }
 
 /**
- * Stage 4: Validator for Initial Generation
- * Validates and fixes complete files
+ * Stage 4: Compilation Validator for Initial Generation
+ * Validates and fixes complete files using comprehensive compilation validation
  */
 async function executeStage4InitialValidation(
   generatedFiles: { filename: string; content: string }[],
@@ -2352,99 +2107,52 @@ async function executeStage4InitialValidation(
   projectId?: string
 ): Promise<{ filename: string; content: string }[]> {
   console.log("\n" + "=".repeat(50));
-  console.log("🔍 STAGE 4: Validation (Initial Generation)");
+  console.log("🔍 STAGE 4: Compilation Validation (Initial Generation)");
   console.log("=".repeat(50));
+  console.log(`📊 Input Summary:`);
+  console.log(`  - Generated files: ${generatedFiles.length}`);
+  console.log(`  - Current files: ${currentFiles.length}`);
+  console.log(`  - Project ID: ${projectId || 'None'}`);
 
-  const validation = validateGeneratedFiles(generatedFiles);
-  const importValidation = validateImportsAndReferences(generatedFiles, currentFiles);
-  const clientDirectiveValidation = validateClientDirectives(generatedFiles);
-  const typescriptValidation = validateTypeScriptIssues(generatedFiles);
-  const reactValidation = validateReactIssues(generatedFiles);
-
-  console.log("🔍 Validation Results:");
-  console.log("  Files Valid:", validation.isValid);
-  console.log("  Missing Imports:", importValidation.missingImports.length);
-  console.log("  Missing 'use client' directive:", clientDirectiveValidation.missingClientDirective.length);
-  console.log("  TypeScript Errors:", typescriptValidation.typeErrors.length);
-  console.log("  React Errors:", reactValidation.reactErrors.length);
-
-  const hasValidationErrors =
-    !validation.isValid ||
-    clientDirectiveValidation.missingClientDirective.length > 0 ||
-    typescriptValidation.typeErrors.length > 0 ||
-    reactValidation.reactErrors.length > 0;
-
-  if (!hasValidationErrors) {
-    console.log("✅ No validation errors - files are valid");
-    return generatedFiles;
-  }
-
-  console.log("⚠️ Validation errors found - applying fixes...");
-
-  const errors = [
-    ...validation.missingFiles.map((f) => f),
-    ...clientDirectiveValidation.missingClientDirective.map(
-      (m) => `Missing 'use client' directive in ${m.file}: ${m.reason}`
-    ),
-    ...typescriptValidation.typeErrors.map(
-      (t) => `TypeScript error in ${t.file}: ${t.error}`
-    ),
-    ...reactValidation.reactErrors.map(
-      (r) => `React error in ${r.file}: ${r.error}`
-    ),
-  ];
-
-  // Filter files with errors
-  const invalidFiles = generatedFiles.filter((file) => {
-    const isMissingFile = validation.missingFiles.some((f) =>
-      f.includes(file.filename)
-    );
-    const isMissingClientDirective =
-      clientDirectiveValidation.missingClientDirective.some(
-        (m) => m.file === file.filename
-      );
-    const hasTypeScriptError = typescriptValidation.typeErrors.some(
-      (t) => t.file === file.filename
-    );
-    const hasReactError = reactValidation.reactErrors.some(
-      (r) => r.file === file.filename
-    );
-
-    return isMissingFile || isMissingClientDirective || hasTypeScriptError || hasReactError;
-  });
-
-  const validFiles = generatedFiles.filter(file => !invalidFiles.includes(file));
-
-  if (invalidFiles.length === 0) {
-    return generatedFiles;
-  }
-
-  console.log(`🔄 Rewriting ${invalidFiles.length} invalid files...`);
+  console.log("\n🔧 Initializing CompilationValidator...");
+  const validator = new CompilationValidator(process.cwd());
   
-  const rewrittenFiles = await callLLM(
-    getStage4ValidatorPrompt(invalidFiles, errors, true),
-    "Stage 4: Validation & Self-Debug",
-    "STAGE_4_VALIDATOR"
+  // Convert to the format expected by CompilationValidator
+  console.log("🔄 Converting files for validation...");
+  const filesForValidation = generatedFiles.map(file => ({
+    filename: file.filename,
+    content: file.content,
+    operation: 'create' as const
+  }));
+  console.log(`  ✅ Converted ${filesForValidation.length} files for validation`);
+
+  console.log("\n🚀 Starting compilation validation...");
+  const compilationResult = await validator.validateProject(
+    filesForValidation,
+    currentFiles
   );
 
-  if (projectId) {
-    logStageResponse(projectId, 'stage4-validator', rewrittenFiles, {
-      systemPromptLength: getStage4ValidatorPrompt(invalidFiles, errors, true).length,
-      invalidFiles: invalidFiles,
-      errors: errors
-    });
+  console.log("\n📊 Compilation Results Summary:");
+  console.log("  ✅ Success:", compilationResult.success);
+  console.log("  ❌ Errors:", compilationResult.errors.length);
+  console.log("  ⚠️  Warnings:", compilationResult.warnings.length);
+  console.log("  ℹ️  Info:", compilationResult.info.length);
+  console.log("  ⏱️  Compilation Time:", compilationResult.compilationTime, "ms");
+  console.log("  📋 Validation Summary:", compilationResult.validationSummary);
+
+  if (compilationResult.success) {
+    console.log("\n🎉 Compilation successful - files are valid!");
+    console.log(`📁 Returning ${compilationResult.files.length} validated files`);
+    return compilationResult.files;
   }
 
-  const rewrittenFilesParsed = parseStage4ValidatorResponse(rewrittenFiles);
-
-  console.log(`✅ Stage 4 complete - Fixed ${rewrittenFilesParsed.length} files`);
-
-  return [...validFiles, ...rewrittenFilesParsed];
+  console.log("\n⚠️ Compilation errors found - proceeding to error fixing...");
+  return await fixCompilationErrors(compilationResult, callLLM, projectId, true);
 }
 
 /**
- * Stage 4: Validator for Follow-Up Changes
- * Validates and fixes diff-based changes
+ * Stage 4: Compilation Validator for Follow-Up Changes
+ * Validates and fixes diff-based changes using comprehensive compilation validation
  */
 async function executeStage4FollowUpValidation(
   generatedFiles: { filename: string; content: string }[],
@@ -2458,131 +2166,326 @@ async function executeStage4FollowUpValidation(
   projectId?: string
 ): Promise<{ filename: string; content: string }[]> {
   console.log("\n" + "=".repeat(50));
-  console.log("🔍 STAGE 4: Validation (Follow-Up Changes)");
+  console.log("🔍 STAGE 4: Compilation Validation (Follow-Up Changes)");
   console.log("=".repeat(50));
+  console.log(`📊 Input Summary:`);
+  console.log(`  - Generated files: ${generatedFiles.length}`);
+  console.log(`  - Current files: ${currentFiles.length}`);
+  console.log(`  - Project ID: ${projectId || 'None'}`);
 
-  const validation = validateGeneratedFiles(generatedFiles);
-  const importValidation = validateImportsAndReferences(generatedFiles, currentFiles);
-  const clientDirectiveValidation = validateClientDirectives(generatedFiles);
-  const typescriptValidation = validateTypeScriptIssues(generatedFiles);
-  const reactValidation = validateReactIssues(generatedFiles);
-
-  console.log("🔍 Validation Results:");
-  console.log("  Files Valid:", validation.isValid);
-  console.log("  Missing Imports:", importValidation.missingImports.length);
-  console.log("  Missing 'use client' directive:", clientDirectiveValidation.missingClientDirective.length);
-  console.log("  TypeScript Errors:", typescriptValidation.typeErrors.length);
-  console.log("  React Errors:", reactValidation.reactErrors.length);
-
-  const hasValidationErrors =
-    !validation.isValid ||
-    clientDirectiveValidation.missingClientDirective.length > 0 ||
-    typescriptValidation.typeErrors.length > 0 ||
-    reactValidation.reactErrors.length > 0;
-
-  if (!hasValidationErrors) {
-    console.log("✅ No validation errors - files are valid");
-    return generatedFiles;
-  }
-
-  console.log("⚠️ Validation errors found - applying surgical fixes...");
-
-  const errors = [
-    ...validation.missingFiles.map((f) => f),
-    ...clientDirectiveValidation.missingClientDirective.map(
-      (m) => `Missing 'use client' directive in ${m.file}: ${m.reason}`
-    ),
-    ...typescriptValidation.typeErrors.map(
-      (t) => `TypeScript error in ${t.file}: ${t.error}`
-    ),
-    ...reactValidation.reactErrors.map(
-      (r) => `React error in ${r.file}: ${r.error}`
-    ),
-  ];
-
-  // Filter files with errors
-  const invalidFiles = generatedFiles.filter((file) => {
-    const isMissingFile = validation.missingFiles.some((f) =>
-      f.includes(file.filename)
-    );
-    const isMissingClientDirective =
-      clientDirectiveValidation.missingClientDirective.some(
-        (m) => m.file === file.filename
-      );
-    const hasTypeScriptError = typescriptValidation.typeErrors.some(
-      (t) => t.file === file.filename
-    );
-    const hasReactError = reactValidation.reactErrors.some(
-      (r) => r.file === file.filename
-    );
-
-    return isMissingFile || isMissingClientDirective || hasTypeScriptError || hasReactError;
-  });
-
-  if (invalidFiles.length === 0) {
-    return generatedFiles;
-  }
-
-  console.log(`🔄 Applying surgical fixes to ${invalidFiles.length} invalid files...`);
+  console.log("\n🔧 Initializing CompilationValidator...");
+  const validator = new CompilationValidator(process.cwd());
   
-  const rewrittenFiles = await callLLM(
-    getStage4ValidatorPrompt(invalidFiles, errors, false),
-    "Stage 4: Validation & Self-Debug",
-    "STAGE_4_VALIDATOR"
+  // Convert to the format expected by CompilationValidator
+  console.log("🔄 Converting files for validation (follow-up mode)...");
+  // For follow-up changes, we need to pass the actual file content for validation
+  // The CompilationValidator will handle the diff application internally
+  const filesForValidation = generatedFiles.map(file => ({
+    filename: file.filename,
+    content: file.content,
+    operation: 'modify' as const
+  }));
+  console.log(`  ✅ Converted ${filesForValidation.length} files for validation`);
+
+  console.log("\n🚀 Starting compilation validation...");
+  const compilationResult = await validator.validateProject(
+    filesForValidation,
+    currentFiles
   );
 
-  if (projectId) {
-    logStageResponse(projectId, 'stage4-validator', rewrittenFiles, {
-      systemPromptLength: getStage4ValidatorPrompt(invalidFiles, errors, false).length,
-      invalidFiles: invalidFiles,
-      errors: errors
-    });
+  console.log("\n📊 Compilation Results Summary:");
+  console.log("  ✅ Success:", compilationResult.success);
+  console.log("  ❌ Errors:", compilationResult.errors.length);
+  console.log("  ⚠️  Warnings:", compilationResult.warnings.length);
+  console.log("  ℹ️  Info:", compilationResult.info.length);
+  console.log("  ⏱️  Compilation Time:", compilationResult.compilationTime, "ms");
+  console.log("  📋 Validation Summary:", compilationResult.validationSummary);
+
+  if (compilationResult.success) {
+    console.log("\n🎉 Compilation successful - files are valid!");
+    console.log(`📁 Returning ${compilationResult.files.length} validated files`);
+    return compilationResult.files;
   }
 
-  const rewrittenFilesParsed = parseStage4ValidatorResponse(rewrittenFiles);
+  console.log("\n⚠️ Compilation errors found - proceeding to surgical error fixing...");
+  return await fixCompilationErrors(compilationResult, callLLM, projectId, false);
+}
 
-  // For follow-up validation, we need to apply diffs to get complete files
-  const fixedFiles: { filename: string; content: string }[] = [];
+
+/**
+ * Fix compilation errors using LLM-based error correction
+ */
+async function fixCompilationErrors(
+  compilationResult: CompilationResult,
+  callLLM: (
+    systemPrompt: string,
+    userPrompt: string,
+    stageName: string,
+    stageType?: keyof typeof STAGE_MODEL_CONFIG
+  ) => Promise<string>,
+  projectId?: string,
+  isInitialGeneration: boolean = false
+): Promise<{ filename: string; content: string }[]> {
+  console.log("\n" + "=".repeat(60));
+  console.log("🔧 STAGE 4: Compilation Error Fixing Process");
+  console.log("=".repeat(60));
+  console.log(`📊 Input Summary:`);
+  console.log(`  - Total files: ${compilationResult.files.length}`);
+  console.log(`  - Compilation errors: ${compilationResult.errors.length}`);
+  console.log(`  - Compilation warnings: ${compilationResult.warnings.length}`);
+  console.log(`  - Compilation info: ${compilationResult.info.length}`);
+  console.log(`  - Is Initial Generation: ${isInitialGeneration}`);
   
-  for (const file of rewrittenFilesParsed) {
-    if (file.unifiedDiff && file.diffHunks) {
-      // This is a diff-based fix, apply it to the current file
-      const currentFile = generatedFiles.find(f => f.filename === file.filename);
-      if (currentFile) {
-        try {
-          const updatedContent = applyDiffToContent(currentFile.content, file.unifiedDiff);
-          fixedFiles.push({
-            filename: file.filename,
-            content: updatedContent
-          });
-        } catch (error) {
-          console.warn(`⚠️ Failed to apply diff for ${file.filename}, using original content:`, error);
-          fixedFiles.push({
-            filename: file.filename,
-            content: currentFile.content
-          });
-        }
-      } else {
-        console.warn(`⚠️ Could not find current file for ${file.filename}, skipping diff application`);
+  // Use only compilation errors (common issues detection removed due to false positives)
+  console.log("\n🔍 Step 1: Processing compilation errors...");
+  const allErrors = compilationResult.errors;
+  console.log(`  ✅ Total errors to process: ${allErrors.length}`);
+  
+  // Group errors by file for easier processing
+  console.log("\n🔍 Step 2: Grouping errors by file...");
+  const errorsByFile = CompilationErrorUtils.groupErrorsByFile(allErrors);
+  console.log(`  ✅ Errors grouped into ${errorsByFile.size} files`);
+  
+  // Debug: Log error files and available files
+  console.log("\n🔍 Step 3: File matching analysis...");
+  console.log("  📋 Error files:", Array.from(errorsByFile.keys()));
+  console.log("  📋 Available files:", compilationResult.files.map(f => f.filename));
+  
+  // Get files that need fixing - try multiple matching strategies
+  console.log("\n🔍 Step 4: Finding files that need fixing...");
+  let filesToFix = compilationResult.files.filter(file => 
+    errorsByFile.has(file.filename)
+  );
+  console.log(`  📊 Exact matches found: ${filesToFix.length} files`);
+
+  // If no exact matches, try to match by basename or relative path
+  if (filesToFix.length === 0) {
+    console.log("  🔍 No exact filename matches found, trying alternative matching strategies...");
+    
+    // Try matching by basename (filename without path)
+    console.log("  🔍 Attempting basename matching...");
+    const errorBasenames = new Map<string, CompilationError[]>();
+    for (const [errorFile, errors] of errorsByFile.entries()) {
+      const basename = path.basename(errorFile);
+      if (!errorBasenames.has(basename)) {
+        errorBasenames.set(basename, []);
       }
-    } else if (file.content) {
-      // This is a complete file fix
-      fixedFiles.push({
-        filename: file.filename,
-        content: file.content
-      });
+      errorBasenames.get(basename)!.push(...errors);
+    }
+    console.log(`  📋 Error basenames: ${Array.from(errorBasenames.keys())}`);
+    
+    filesToFix = compilationResult.files.filter(file => {
+      const fileBasename = path.basename(file.filename);
+      return errorBasenames.has(fileBasename);
+    });
+    
+    if (filesToFix.length > 0) {
+      console.log(`  ✅ Found ${filesToFix.length} files using basename matching`);
+      console.log(`  📋 Matched files: ${filesToFix.map(f => f.filename)}`);
+      
+      // Update errorsByFile to use the matched filenames
+      const newErrorsByFile = new Map<string, CompilationError[]>();
+      for (const file of filesToFix) {
+        const fileBasename = path.basename(file.filename);
+        const errors = errorBasenames.get(fileBasename) || [];
+        if (errors.length > 0) {
+          newErrorsByFile.set(file.filename, errors);
+          console.log(`  🔗 Mapped ${fileBasename} -> ${file.filename} (${errors.length} errors)`);
+        }
+      }
+      // Replace the original errorsByFile
+      for (const [key, value] of newErrorsByFile.entries()) {
+        errorsByFile.set(key, value);
+      }
+    } else {
+      console.log("  ❌ No basename matches found either");
     }
   }
 
-  console.log(`✅ Stage 4 complete - Fixed ${fixedFiles.length} files`);
+  if (filesToFix.length === 0) {
+    console.log("\n❌ CRITICAL: No files identified for fixing!");
+    console.log("📋 This indicates a serious issue with error parsing or file mapping");
+    console.log("📋 Error files:", Array.from(errorsByFile.keys()));
+    console.log("📋 Available files:", compilationResult.files.map(f => f.filename));
+    console.log("📋 Returning original files - manual review required");
+    return compilationResult.files;
+  }
 
-  // Replace the invalid files with the fixed ones
-  const finalFiles = generatedFiles.map(file => {
-    const fixedFile = fixedFiles.find(f => f.filename === file.filename);
-    return fixedFile || file;
+  // Create detailed error messages for LLM
+  console.log("\n🔍 Step 5: Creating error messages for LLM...");
+  const errorMessages = Array.from(errorsByFile.entries()).map(([file, errors]) => {
+    const errorList = errors.map(e => {
+      const location = e.line ? `Line ${e.line}${e.column ? `:${e.column}` : ''}` : 'Unknown location';
+      const suggestion = e.suggestion ? ` (Suggestion: ${e.suggestion})` : '';
+      return `${location}: ${e.message} (${e.category})${suggestion}`;
+    }).join('\n');
+    return `${file}:\n${errorList}`;
+  }).join('\n\n');
+
+  console.log(`  ✅ Prepared error messages for ${filesToFix.length} files`);
+  console.log(`  📋 Files to fix: ${filesToFix.map(f => f.filename)}`);
+  console.log("  📋 Error summary:");
+  filesToFix.forEach(file => {
+    const errors = errorsByFile.get(file.filename) || [];
+    console.log(`    - ${file.filename}: ${errors.length} errors`);
   });
 
+  // Call LLM to fix errors
+  console.log("\n🤖 Step 6: Calling LLM to fix errors...");
+  console.log(`  📤 Preparing LLM prompt for ${filesToFix.length} files...`);
+  
+  const fixPrompt = getStage4CompilationFixPrompt(filesToFix, errorMessages, isInitialGeneration);
+  console.log(`  📏 Prompt length: ${fixPrompt.length} characters`);
+  console.log(`  🎯 Generation type: ${isInitialGeneration ? 'Complete files' : 'Surgical diffs'}`);
+  
+  console.log("  🚀 Calling LLM...");
+  const fixResponse = await callLLM(
+    fixPrompt,
+    "Stage 4: Compilation Error Fixes",
+    "STAGE_4_VALIDATOR"
+  );
+  console.log(`  ✅ LLM response received: ${fixResponse.length} characters`);
+
+  if (projectId) {
+    console.log("  📝 Logging response for debugging...");
+    logStageResponse(projectId, 'stage4-compilation-fixes', fixResponse, {
+      compilationErrors: compilationResult.errors,
+      filesToFix: filesToFix.length,
+      errorSummary: CompilationErrorUtils.getErrorSummary(compilationResult.errors)
+    });
+  }
+
+  // Parse and return fixed files
+  console.log("\n🔍 Step 7: Parsing LLM response...");
+  const fixedFiles = parseStage4ValidatorResponse(fixResponse);
+  console.log(`  ✅ Parsed ${fixedFiles.length} fixed files from LLM response`);
+  
+  // Merge fixed files with unchanged files
+  console.log("\n🔍 Step 8: Merging fixed and unchanged files...");
+  const unchangedFiles = compilationResult.files.filter(file => 
+    !errorsByFile.has(file.filename)
+  );
+  console.log(`  📊 Unchanged files: ${unchangedFiles.length}`);
+  console.log(`  📊 Fixed files: ${fixedFiles.length}`);
+
+  const finalFiles = [...unchangedFiles];
+  
+  // Add fixed files
+  console.log("  🔄 Processing fixed files...");
+  for (const fixedFile of fixedFiles) {
+    if (fixedFile.content) {
+      console.log(`    ✅ ${fixedFile.filename}: Complete content provided`);
+      finalFiles.push({
+        filename: fixedFile.filename,
+        content: fixedFile.content
+      });
+    } else if (fixedFile.unifiedDiff) {
+      console.log(`    🔧 ${fixedFile.filename}: Applying unified diff...`);
+      // Apply diff to get final content
+      const originalFile = compilationResult.files.find(f => f.filename === fixedFile.filename);
+      if (originalFile) {
+        try {
+          const updatedContent = applyDiffToContent(originalFile.content, fixedFile.unifiedDiff);
+          finalFiles.push({
+            filename: fixedFile.filename,
+            content: updatedContent
+          });
+          console.log(`    ✅ ${fixedFile.filename}: Diff applied successfully`);
+        } catch (error) {
+          console.warn(`    ⚠️ ${fixedFile.filename}: Failed to apply diff:`, error);
+          finalFiles.push(originalFile);
+        }
+      } else {
+        console.warn(`    ❌ ${fixedFile.filename}: Original file not found for diff application`);
+      }
+    } else {
+      console.warn(`    ⚠️ ${fixedFile.filename}: No content or diff provided`);
+    }
+  }
+
+  console.log("\n" + "=".repeat(60));
+  console.log("🎉 STAGE 4: Compilation Error Fixing Complete!");
+  console.log("=".repeat(60));
+  console.log(`📊 Final Results:`);
+  console.log(`  - Total files: ${finalFiles.length}`);
+  console.log(`  - Files fixed: ${fixedFiles.length}`);
+  console.log(`  - Files unchanged: ${unchangedFiles.length}`);
+  console.log(`  - Original errors: ${compilationResult.errors.length}`);
+  console.log("=".repeat(60));
+  
   return finalFiles;
+}
+
+/**
+ * Generate Stage 4 compilation fix prompt
+ */
+function getStage4CompilationFixPrompt(
+  filesToFix: { filename: string; content: string }[],
+  errorMessages: string,
+  isInitialGeneration: boolean
+): string {
+  return `
+ROLE: Compilation Error Fixer for Next.js 15 + TypeScript + React + Solidity
+
+COMPILATION ERRORS FOUND:
+${errorMessages}
+
+FILES TO FIX:
+${filesToFix.map((f) => `---${f.filename}---\n${f.content}`).join("\n\n")}
+
+TASK: Fix the compilation errors above. ${isInitialGeneration ? 'Generate complete corrected files.' : 'Generate surgical diff patches to fix only the specific compilation errors.'}
+
+CRITICAL REQUIREMENTS:
+- Fix ALL compilation errors listed above
+- Preserve existing functionality and UI implementations
+- Only fix the specific errors mentioned
+- Do not introduce new errors
+- Maintain code quality and best practices
+- Ensure TypeScript compilation passes
+- Ensure Solidity contracts compile successfully
+- Follow ESLint rules and best practices
+
+COMPILATION ERROR TYPES:
+1. TypeScript Errors: Fix type mismatches, missing imports, interface violations, function signatures
+2. Solidity Errors: Fix contract compilation issues, syntax errors, type mismatches
+3. ESLint Errors: Fix code style and best practice violations
+4. Build Errors: Fix Next.js build failures, missing dependencies
+5. Runtime Errors: Fix potential runtime issues, memory leaks, error handling
+
+${isInitialGeneration ? `
+OUTPUT FORMAT - Complete Files:
+__START_JSON__
+[
+  {
+    "filename": "EXACT_SAME_FILENAME",
+    "content": "Complete corrected file content with all compilation errors fixed"
+  }
+]
+__END_JSON__
+` : `
+OUTPUT FORMAT - Surgical Diffs:
+__START_JSON__
+[
+  {
+    "filename": "EXACT_SAME_FILENAME",
+    "operation": "modify",
+    "unifiedDiff": "@@ -X,Y +X,Z @@\n context\n-old line\n+new line\n context",
+    "diffHunks": [
+      {
+        "oldStart": X,
+        "oldLines": Y,
+        "newStart": X,
+        "newLines": Z,
+        "lines": [" context", "-old line", "+new line", " context"]
+      }
+    ]
+  }
+]
+__END_JSON__
+`}
+
+CRITICAL: Return ONLY the JSON array above. No explanations, no text, no markdown formatting.
+`;
 }
 
 // ========================================================================
