@@ -56,7 +56,7 @@ export class RailwayValidationClient {
   }
 
   /**
-   * Validate project files using Railway's full compilation validation
+   * Validate project files using Railway's full compilation validation with retry logic
    */
   async validateProject(
     projectId: string,
@@ -73,39 +73,61 @@ export class RailwayValidationClient {
     console.log(`📁 Files to validate: ${files.length}`);
     console.log(`⚙️  Validation config:`, validationConfig);
 
-    try {
-      // Convert files array to object format expected by Railway
-      const filesObject: { [filename: string]: string } = {};
-      files.forEach(file => {
-        filesObject[file.filename] = file.content;
-      });
+    // Convert files array to object format expected by Railway
+    const filesObject: { [filename: string]: string } = {};
+    files.forEach(file => {
+      filesObject[file.filename] = file.content;
+    });
 
-      const requestBody: RailwayValidationRequest = {
-        projectId,
-        files: filesObject,
-        validationConfig
-      };
+    const requestBody: RailwayValidationRequest = {
+      projectId,
+      files: filesObject,
+      validationConfig
+    };
 
-      console.log(`📤 Sending validation request to: ${this.apiBase}/validate`);
-      console.log(`📏 Request size: ${JSON.stringify(requestBody).length} characters`);
+    console.log(`📤 Sending validation request to: ${this.apiBase}/validate`);
+    console.log(`📏 Request size: ${JSON.stringify(requestBody).length} characters`);
 
-      const startTime = Date.now();
-      
-      // Make HTTP request to Railway validation API
-      const response = await this.makeRequest('/validate', requestBody);
-      
-      const requestTime = Date.now() - startTime;
-      console.log(`📥 Railway validation response received in ${requestTime}ms`);
-      console.log(`✅ Success: ${response.success}`);
-      console.log(`❌ Errors: ${response.errors?.length || 0}`);
-      console.log(`⚠️  Warnings: ${response.warnings?.length || 0}`);
+    // Retry logic with exponential backoff
+    const maxRetries = 3;
+    const baseDelay = 1000; // 1 second
 
-      return response as RailwayValidationResult;
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        console.log(`🔄 Railway validation attempt ${attempt}/${maxRetries}`);
+        
+        const startTime = Date.now();
+        const response = await this.makeRequest('/validate', requestBody);
+        const requestTime = Date.now() - startTime;
+        
+        console.log(`📥 Railway validation response received in ${requestTime}ms`);
+        console.log(`✅ Success: ${response.success}`);
+        console.log(`❌ Errors: ${response.errors?.length || 0}`);
+        console.log(`⚠️  Warnings: ${response.warnings?.length || 0}`);
 
-    } catch (error) {
-      console.error(`❌ Railway validation failed:`, error);
-      throw new Error(`Railway validation failed: ${error instanceof Error ? error.message : String(error)}`);
+        return response as RailwayValidationResult;
+
+      } catch (error) {
+        const isLastAttempt = attempt === maxRetries;
+        
+        console.error(`❌ Railway validation attempt ${attempt} failed:`, error);
+        
+        if (isLastAttempt) {
+          console.error(`❌ All ${maxRetries} Railway validation attempts failed`);
+          throw new Error(`Railway validation failed after ${maxRetries} attempts: ${error instanceof Error ? error.message : String(error)}`);
+        }
+        
+        // Calculate delay with exponential backoff
+        const delay = baseDelay * Math.pow(2, attempt - 1);
+        console.log(`⏳ Retrying in ${delay}ms... (attempt ${attempt + 1}/${maxRetries})`);
+        
+        // Wait before retry
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
     }
+
+    // This should never be reached, but TypeScript requires it
+    throw new Error('Railway validation failed: Unexpected error in retry loop');
   }
 
   /**
@@ -197,8 +219,8 @@ export function createRailwayValidationClient(): RailwayValidationClient {
     throw new Error('Railway validation requires PREVIEW_AUTH_TOKEN or RAILWAY_VALIDATION_TOKEN environment variable');
   }
 
-  // Set timeout based on environment
-  const timeout = process.env.NODE_ENV === 'production' ? 60000 : 30000; // 60s prod, 30s dev
+  // Set timeout based on environment - increased for better reliability
+  const timeout = process.env.NODE_ENV === 'production' ? 120000 : 60000; // 2min prod, 1min dev
 
   console.log(`🚂 Railway validation client configured:`);
   console.log(`  API Base: ${apiBase}`);
