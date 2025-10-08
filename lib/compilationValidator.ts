@@ -80,7 +80,10 @@ export class CompilationValidator {
   constructor(projectRoot: string, config: Partial<ValidationConfig> = {}) {
     this.projectRoot = projectRoot;
     this.config = { ...DEFAULT_CONFIG, ...config };
-    this.tempDir = path.join(projectRoot, '.temp-compilation');
+    // Use /tmp for serverless environments like Vercel, fallback to project root for local development
+    this.tempDir = process.env.NODE_ENV === 'production' 
+      ? path.join('/tmp', 'temp-compilation', Date.now().toString())
+      : path.join(projectRoot, '.temp-compilation');
     this.startTime = Date.now();
   }
 
@@ -255,11 +258,24 @@ export class CompilationValidator {
    * Create temporary project structure for validation
    */
   private async createTempProject(files: { filename: string; content: string }[]): Promise<void> {
-    // Clean and create temp directory
-    if (fs.existsSync(this.tempDir)) {
-      fs.rmSync(this.tempDir, { recursive: true, force: true });
+    try {
+      // Clean and create temp directory
+      if (fs.existsSync(this.tempDir)) {
+        fs.rmSync(this.tempDir, { recursive: true, force: true });
+      }
+      
+      // Ensure parent directory exists for /tmp path
+      const parentDir = path.dirname(this.tempDir);
+      if (!fs.existsSync(parentDir)) {
+        fs.mkdirSync(parentDir, { recursive: true });
+      }
+      
+      fs.mkdirSync(this.tempDir, { recursive: true });
+      console.log(`📁 Created temporary directory: ${this.tempDir}`);
+    } catch (error) {
+      console.error(`❌ Failed to create temporary directory: ${this.tempDir}`, error);
+      throw new Error(`Failed to create temporary directory for compilation validation: ${error instanceof Error ? error.message : String(error)}`);
     }
-    fs.mkdirSync(this.tempDir, { recursive: true });
 
     // Copy essential config files
     const configFiles = [
@@ -277,42 +293,60 @@ export class CompilationValidator {
       'hardhat.config.ts'
     ];
 
-    for (const configFile of configFiles) {
-      const sourcePath = path.join(this.projectRoot, configFile);
-      if (fs.existsSync(sourcePath)) {
-        const destPath = path.join(this.tempDir, configFile);
-        const destDir = path.dirname(destPath);
-        
-        if (!fs.existsSync(destDir)) {
-          fs.mkdirSync(destDir, { recursive: true });
+    try {
+      for (const configFile of configFiles) {
+        const sourcePath = path.join(this.projectRoot, configFile);
+        if (fs.existsSync(sourcePath)) {
+          const destPath = path.join(this.tempDir, configFile);
+          const destDir = path.dirname(destPath);
+          
+          if (!fs.existsSync(destDir)) {
+            fs.mkdirSync(destDir, { recursive: true });
+          }
+          
+          fs.copyFileSync(sourcePath, destPath);
+          console.log(`📋 Copied config file: ${configFile}`);
         }
-        
-        fs.copyFileSync(sourcePath, destPath);
       }
+    } catch (error) {
+      console.warn(`⚠️ Failed to copy some config files:`, error);
+      // Continue with validation even if some config files can't be copied
     }
 
     // Copy node_modules if it exists (for faster validation)
-    const nodeModulesPath = path.join(this.projectRoot, 'node_modules');
-    if (fs.existsSync(nodeModulesPath)) {
-      const tempNodeModules = path.join(this.tempDir, 'node_modules');
-      fs.symlinkSync(nodeModulesPath, tempNodeModules, 'dir');
+    try {
+      const nodeModulesPath = path.join(this.projectRoot, 'node_modules');
+      if (fs.existsSync(nodeModulesPath)) {
+        const tempNodeModules = path.join(this.tempDir, 'node_modules');
+        fs.symlinkSync(nodeModulesPath, tempNodeModules, 'dir');
+        console.log(`🔗 Created symlink to node_modules`);
+      }
+    } catch (error) {
+      console.warn(`⚠️ Failed to create node_modules symlink:`, error);
+      // Continue without node_modules symlink
     }
 
     // Write all files to temp directory
-    for (const file of files) {
-      // Skip files that match skip patterns
-      if (this.shouldSkipFile(file.filename)) {
-        continue;
-      }
+    try {
+      for (const file of files) {
+        // Skip files that match skip patterns
+        if (this.shouldSkipFile(file.filename)) {
+          continue;
+        }
 
-      const filePath = path.join(this.tempDir, file.filename);
-      const dir = path.dirname(filePath);
-      
-      if (!fs.existsSync(dir)) {
-        fs.mkdirSync(dir, { recursive: true });
+        const filePath = path.join(this.tempDir, file.filename);
+        const dir = path.dirname(filePath);
+        
+        if (!fs.existsSync(dir)) {
+          fs.mkdirSync(dir, { recursive: true });
+        }
+        
+        fs.writeFileSync(filePath, file.content, 'utf8');
       }
-      
-      fs.writeFileSync(filePath, file.content, 'utf8');
+      console.log(`📝 Wrote ${files.length} files to temporary directory`);
+    } catch (error) {
+      console.error(`❌ Failed to write files to temporary directory:`, error);
+      throw new Error(`Failed to write files for compilation validation: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
