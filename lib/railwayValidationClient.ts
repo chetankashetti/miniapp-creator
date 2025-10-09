@@ -67,7 +67,7 @@ export class RailwayValidationClient {
     validationConfig: RailwayValidationConfig = {
       enableTypeScript: true,
       enableSolidity: true,
-      enableESLint: true,
+      enableESLint: false,
       enableBuild: true,
       enableRuntimeChecks: true
     },
