@@ -99,7 +99,8 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
             console.log('🔍 ChatInterface useEffect triggered:', { 
                 currentProject: currentProject?.projectId, 
                 sessionToken: !!sessionToken,
-                currentPhase 
+                currentPhase,
+                timestamp: new Date().toISOString()
             });
             
             if (currentProject?.projectId && sessionToken) {
@@ -178,6 +179,7 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
 
     // Notify parent when generating state changes
     useEffect(() => {
+        console.log('🔄 onGeneratingChange called with isGenerating:', isGenerating);
         onGeneratingChange(isGenerating);
     }, [isGenerating, onGeneratingChange]);
 
@@ -499,10 +501,12 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
             }
         } catch (err) {
             let errorMessage = 'An error occurred';
+            let isTimeout = false;
             
             if (err instanceof Error) {
                 if (err.name === 'AbortError') {
                     errorMessage = 'Generation request timed out after 12 minutes. The server might be overloaded. Please try again.';
+                    isTimeout = true;
                 } else {
                     errorMessage = err.message;
                 }
@@ -519,11 +523,20 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
                     timestamp: Date.now()
                 }
             ]);
+            
+            // Reset flags only for non-timeout errors to allow retry
+            if (!isTimeout) {
+                setHasTriggeredGeneration(false);
+                setGenerationFlag(false);
+            } else {
+                // For timeout errors, reset phase to requirements and keep flags set
+                console.log('⏰ Timeout occurred - resetting phase to requirements but keeping generation flags');
+                setCurrentPhase('requirements');
+                // Keep generation flags set to prevent duplicate requests
+            }
         } finally {
             setIsGenerating(false);
-            // Reset generation flag on completion (success or error)
-            setHasTriggeredGeneration(false);
-            setGenerationFlag(false);
+            // Don't reset generation flags here - handle in catch block based on error type
         }
     };
 
