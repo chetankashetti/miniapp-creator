@@ -23,8 +23,8 @@ export function DevelopmentLogs({ onComplete }: DevelopmentLogsProps) {
     const [progress, setProgress] = useState(0);
 
     useEffect(() => {
-        // Simulate generation time - 10 minutes to be safer than actual generation timeout
-        const totalTime = 10 * 60 * 1000; // 10 minutes in milliseconds
+        // Simulate generation time - 12 minutes to be safer than actual generation timeout
+        const totalTime = 12 * 60 * 1000; // 12 minutes in milliseconds
         let currentTime = 0;
         
         const progressTimer = setInterval(() => {
