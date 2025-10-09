@@ -1,6 +1,9 @@
 // Railway validation client for minidev
 // Handles communication with Railway's validation API
 
+import * as fs from 'fs';
+import * as path from 'path';
+
 export interface RailwayValidationConfig {
   enableTypeScript: boolean;
   enableSolidity: boolean;
@@ -67,21 +70,24 @@ export class RailwayValidationClient {
       enableESLint: true,
       enableBuild: true,
       enableRuntimeChecks: true
-    }
+    },
+    projectDir?: string // Optional: path to complete project directory (boilerplate + generated files)
   ): Promise<RailwayValidationResult> {
     console.log(`🚂 Calling Railway validation API for project: ${projectId}`);
-    console.log(`📁 Files to validate: ${files.length}`);
+    console.log(`📁 Generated files to validate: ${files.length}`);
     console.log(`⚙️  Validation config:`, validationConfig);
 
-    // Convert files array to object format expected by Railway
-    const filesObject: { [filename: string]: string } = {};
-    files.forEach(file => {
-      filesObject[file.filename] = file.content;
-    });
+    // Use complete project directory if provided, otherwise build from scratch
+    const completeFilesObject = projectDir 
+      ? await this.buildCompleteProjectFilesFromDir(projectDir, files)
+      : await this.buildCompleteProjectFiles(files);
+    
+    console.log(`📁 Complete project files: ${Object.keys(completeFilesObject).length}`);
+    console.log(`📋 Files included:`, Object.keys(completeFilesObject).slice(0, 10).join(', ') + (Object.keys(completeFilesObject).length > 10 ? '...' : ''));
 
     const requestBody: RailwayValidationRequest = {
       projectId,
-      files: filesObject,
+      files: completeFilesObject,
       validationConfig
     };
 
@@ -128,6 +134,218 @@ export class RailwayValidationClient {
 
     // This should never be reached, but TypeScript requires it
     throw new Error('Railway validation failed: Unexpected error in retry loop');
+  }
+
+  /**
+   * Build complete project files from existing project directory + generated files
+   */
+  private async buildCompleteProjectFilesFromDir(projectDir: string, generatedFiles: { filename: string; content: string }[]): Promise<{ [filename: string]: string }> {
+    const completeFiles: { [filename: string]: string } = {};
+    
+    console.log(`📁 Reading complete project from directory: ${projectDir}`);
+    
+    // Read all files from the project directory
+    const readDirRecursive = async (dir: string, baseDir: string = dir): Promise<void> => {
+      try {
+        const entries = fs.readdirSync(dir, { withFileTypes: true });
+        
+        for (const entry of entries) {
+          const fullPath = path.join(dir, entry.name);
+          const relativePath = path.relative(baseDir, fullPath);
+          
+          // Skip common directories that shouldn't be included
+          if (entry.isDirectory()) {
+            if (!['node_modules', '.git', '.next', 'dist', 'build'].includes(entry.name)) {
+              await readDirRecursive(fullPath, baseDir);
+            }
+          } else if (entry.isFile()) {
+            // Skip common files that shouldn't be included
+            if (!['package-lock.json', 'pnpm-lock.yaml', 'yarn.lock', 'bun.lockb'].includes(entry.name)) {
+              try {
+                const content = fs.readFileSync(fullPath, 'utf8');
+                completeFiles[relativePath] = content;
+                console.log(`✅ Included project file: ${relativePath}`);
+              } catch (error) {
+                console.warn(`⚠️ Failed to read project file ${relativePath}:`, error);
+              }
+            }
+          }
+        }
+      } catch (error) {
+        console.warn(`⚠️ Failed to read directory ${dir}:`, error);
+      }
+    };
+    
+    await readDirRecursive(projectDir);
+    
+    // Override with generated files (they take precedence)
+    for (const file of generatedFiles) {
+      completeFiles[file.filename] = file.content;
+      console.log(`✅ Overrode with generated file: ${file.filename}`);
+    }
+    
+    console.log(`📊 Complete project structure from directory:`);
+    console.log(`  - Project files: ${Object.keys(completeFiles).length - generatedFiles.length}`);
+    console.log(`  - Generated files: ${generatedFiles.length}`);
+    console.log(`  - Total files: ${Object.keys(completeFiles).length}`);
+    
+    return completeFiles;
+  }
+
+  /**
+   * Build complete project files by including boilerplate config files + generated files
+   */
+  private async buildCompleteProjectFiles(generatedFiles: { filename: string; content: string }[]): Promise<{ [filename: string]: string }> {
+    const completeFiles: { [filename: string]: string } = {};
+    
+    // Essential boilerplate config files that Railway validation needs
+    const boilerplateConfigFiles = [
+      'package.json',
+      'tsconfig.json', 
+      'next.config.ts',
+      'eslint.config.mjs',
+      'postcss.config.mjs',
+      'next-env.d.ts'
+    ];
+    
+    // Try to read boilerplate files from common locations
+    const possibleBoilerplatePaths = [
+      path.join(process.cwd(), 'boilerplate'),
+      path.join(process.cwd(), '..', 'boilerplate'),
+      path.join(process.cwd(), 'minidev-preview-host', 'boilerplate'),
+      path.join(process.cwd(), '..', 'minidev-preview-host', 'boilerplate')
+    ];
+    
+    let boilerplatePath: string | null = null;
+    for (const possiblePath of possibleBoilerplatePaths) {
+      if (fs.existsSync(possiblePath)) {
+        boilerplatePath = possiblePath;
+        console.log(`📁 Found boilerplate at: ${boilerplatePath}`);
+        break;
+      }
+    }
+    
+    if (boilerplatePath) {
+      // Include boilerplate config files
+      for (const configFile of boilerplateConfigFiles) {
+        const configPath = path.join(boilerplatePath, configFile);
+        if (fs.existsSync(configPath)) {
+          try {
+            const content = fs.readFileSync(configPath, 'utf8');
+            completeFiles[configFile] = content;
+            console.log(`✅ Included boilerplate file: ${configFile}`);
+          } catch (error) {
+            console.warn(`⚠️ Failed to read boilerplate file ${configFile}:`, error);
+          }
+        }
+      }
+    } else {
+      console.warn(`⚠️ Boilerplate directory not found, using minimal config files`);
+      
+      // Fallback: Create minimal essential config files
+      completeFiles['package.json'] = JSON.stringify({
+        "name": "minidev-validation",
+        "version": "0.1.0",
+        "private": true,
+        "scripts": {
+          "dev": "next dev",
+          "build": "next build",
+          "start": "next start",
+          "lint": "next lint"
+        },
+        "dependencies": {
+          "@farcaster/miniapp-sdk": "^0.1.7",
+          "@farcaster/miniapp-wagmi-connector": "^1.0.0",
+          "@farcaster/quick-auth": "^0.0.7",
+          "@rainbow-me/rainbowkit": "^2.0.0",
+          "@tanstack/react-query": "^5.83.0",
+          "class-variance-authority": "^0.7.0",
+          "clsx": "^2.1.0",
+          "ethers": "^6.11.0",
+          "lucide-react": "^0.525.0",
+          "next": "15.5.4",
+          "react": "^19.0.0",
+          "react-dom": "^19.0.0",
+          "tailwind-merge": "^3.3.1",
+          "viem": "^2.7.0",
+          "wagmi": "^2.5.0"
+        },
+        "devDependencies": {
+          "@eslint/eslintrc": "^3",
+          "@tailwindcss/postcss": "^4",
+          "@types/node": "^20",
+          "@types/react": "^19",
+          "@types/react-dom": "^19",
+          "eslint": "^9",
+          "eslint-config-next": "15.2.0",
+          "tailwindcss": "^4",
+          "typescript": "^5"
+        }
+      }, null, 2);
+      
+      completeFiles['tsconfig.json'] = JSON.stringify({
+        "compilerOptions": {
+          "target": "ES2017",
+          "lib": ["dom", "dom.iterable", "esnext"],
+          "allowJs": true,
+          "skipLibCheck": true,
+          "strict": true,
+          "noEmit": true,
+          "esModuleInterop": true,
+          "module": "esnext",
+          "moduleResolution": "bundler",
+          "resolveJsonModule": true,
+          "isolatedModules": true,
+          "jsx": "preserve",
+          "incremental": true,
+          "plugins": [{ "name": "next" }],
+          "paths": { "@/*": ["./src/*"] }
+        },
+        "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts"],
+        "exclude": ["node_modules"]
+      }, null, 2);
+      
+      completeFiles['next.config.ts'] = `import type { NextConfig } from "next";
+
+const nextConfig: NextConfig = {
+  assetPrefix: process.env.ASSET_PREFIX ?? "",
+  images: {
+    path: \`\${process.env.ASSET_PREFIX ?? ""}/_next/image\`,
+  },
+  async headers() {
+    const frameAncestors = "frame-ancestors 'self' https://minidev.fun https://*.minidev.fun https://farcaster.xyz https://*.farcaster.xyz http://localhost:* http://127.0.0.1:* https://127.0.0.1:*";
+    return [{ source: "/:path*", headers: [{ key: "Content-Security-Policy", value: frameAncestors }] }];
+  },
+};
+
+export default nextConfig;`;
+      
+      completeFiles['eslint.config.mjs'] = `import { dirname } from "path";
+import { fileURLToPath } from "url";
+import { FlatCompat } from "@eslint/eslintrc";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+
+const compat = new FlatCompat({ baseDirectory: __dirname });
+const eslintConfig = [...compat.extends("next/core-web-vitals", "next/typescript")];
+
+export default eslintConfig;`;
+      
+      console.log(`✅ Created minimal config files as fallback`);
+    }
+    
+    // Include all generated files
+    for (const file of generatedFiles) {
+      completeFiles[file.filename] = file.content;
+    }
+    
+    console.log(`📊 Complete project structure:`);
+    console.log(`  - Boilerplate config files: ${boilerplateConfigFiles.length}`);
+    console.log(`  - Generated files: ${generatedFiles.length}`);
+    console.log(`  - Total files: ${Object.keys(completeFiles).length}`);
+    
+    return completeFiles;
   }
 
   /**

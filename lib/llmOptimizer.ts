@@ -1770,7 +1770,8 @@ export async function executeInitialGenerationPipeline(
     stageName: string,
     stageType?: keyof typeof STAGE_MODEL_CONFIG
   ) => Promise<string>,
-  projectId?: string
+  projectId?: string,
+  projectDir?: string
 ): Promise<{ files: { filename: string; content: string }[]; intentSpec: IntentSpec }> {
   try {
     console.log("🚀 Starting INITIAL GENERATION pipeline...");
@@ -1816,7 +1817,8 @@ export async function executeInitialGenerationPipeline(
       generatedFiles,
       currentFiles,
       callLLM,
-      projectId
+      projectId,
+      projectDir
     );
 
     console.log("\n" + "=".repeat(50));
@@ -1853,7 +1855,8 @@ export async function executeFollowUpPipeline(
     stageName: string,
     stageType?: keyof typeof STAGE_MODEL_CONFIG
   ) => Promise<string>,
-  projectId?: string
+  projectId?: string,
+  projectDir?: string
 ): Promise<{ files: { filename: string; content: string }[]; intentSpec: IntentSpec }> {
   try {
     console.log("🚀 Starting FOLLOW-UP CHANGES pipeline...");
@@ -1898,7 +1901,8 @@ export async function executeFollowUpPipeline(
       filesWithDiffs,
       currentFiles,
       callLLM,
-      projectId
+      projectId,
+      projectDir
     );
 
     console.log("\n" + "=".repeat(50));
@@ -2105,7 +2109,8 @@ async function executeStage4InitialValidation(
     stageName: string,
     stageType?: keyof typeof STAGE_MODEL_CONFIG
   ) => Promise<string>,
-  projectId?: string
+  projectId?: string,
+  projectDir?: string
 ): Promise<{ filename: string; content: string }[]> {
   console.log("\n" + "=".repeat(50));
   console.log("🔍 STAGE 4: Compilation Validation (Initial Generation)");
@@ -2134,7 +2139,8 @@ async function executeStage4InitialValidation(
           enableESLint: true,
           enableBuild: true,
           enableRuntimeChecks: true
-        }
+        },
+        projectDir // Pass the complete project directory
       );
 
       console.log("\n📊 Railway Validation Results Summary:");
@@ -2210,7 +2216,8 @@ async function executeStage4FollowUpValidation(
     stageName: string,
     stageType?: keyof typeof STAGE_MODEL_CONFIG
   ) => Promise<string>,
-  projectId?: string
+  projectId?: string,
+  projectDir?: string
 ): Promise<{ filename: string; content: string }[]> {
   console.log("\n" + "=".repeat(50));
   console.log("🔍 STAGE 4: Compilation Validation (Follow-Up Changes)");
@@ -2239,7 +2246,8 @@ async function executeStage4FollowUpValidation(
           enableESLint: true,
           enableBuild: true,
           enableRuntimeChecks: true
-        }
+        },
+        projectDir // Pass the complete project directory
       );
 
       console.log("\n📊 Railway Validation Results Summary:");

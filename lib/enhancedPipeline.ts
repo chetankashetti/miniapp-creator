@@ -77,14 +77,16 @@ export async function executeEnhancedPipeline(
         userPrompt,
         enhancedFiles,
         callLLM,
-        projectId
+        projectId,
+        projectDir
       );
     } else {
       pipelineResult = await executeFollowUpPipeline(
         userPrompt,
         enhancedFiles,
         callLLM,
-        projectId
+        projectId,
+        projectDir
       );
     }
 
