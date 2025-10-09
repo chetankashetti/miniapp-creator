@@ -438,7 +438,7 @@ export function createRailwayValidationClient(): RailwayValidationClient {
   }
 
   // Set timeout based on environment - increased for better reliability
-  const timeout = process.env.NODE_ENV === 'production' ? 120000 : 60000; // 2min prod, 1min dev
+  const timeout = process.env.NODE_ENV === 'production' ? 300000 : 60000; // 2min prod, 1min dev
 
   console.log(`🚂 Railway validation client configured:`);
   console.log(`  API Base: ${apiBase}`);
