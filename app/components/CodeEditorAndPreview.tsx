@@ -62,6 +62,13 @@ export function CodeEditorAndPreview({
         }
     }, [currentProject]);
 
+    // Hide logs when generation completes
+    useEffect(() => {
+        if (!isGenerating && showLogs) {
+            setShowLogs(false);
+        }
+    }, [isGenerating, showLogs]);
+
     const getViewModeIcon = (mode: ViewMode) => {
         switch (mode) {
         case 'code':
@@ -140,7 +147,11 @@ export function CodeEditorAndPreview({
             <div className="h-full flex flex-col">
                 <DevelopmentLogs
                     onComplete={() => {
-                        setShowLogs(false);
+                        // Only hide logs if generation is actually complete
+                        // Don't trigger onComplete if isGenerating is still true
+                        if (!isGenerating) {
+                            setShowLogs(false);
+                        }
                     }}
                 />
             </div>

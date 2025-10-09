@@ -150,7 +150,7 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
         };
 
         loadChatMessages();
-    }, [currentProject, sessionToken, currentPhase, chat.length, aiLoading]); // Added missing dependencies
+    }, [currentProject, sessionToken, currentPhase]); // Removed chat.length and aiLoading to prevent duplicate triggers
 
     // Show warning message once when user hasn't started chatting
     useEffect(() => {
@@ -163,6 +163,18 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
     useEffect(() => {
         scrollToBottom();
     }, [chat, aiLoading]);
+
+    // Add aiLoading timeout to prevent infinite loading
+    useEffect(() => {
+        if (aiLoading) {
+            const timeout = setTimeout(() => {
+                console.log('⏰ AI response timeout after 30 seconds');
+                setAiLoading(false);
+            }, 30000); // 30 second timeout for chat responses
+            
+            return () => clearTimeout(timeout);
+        }
+    }, [aiLoading]);
 
     // Notify parent when generating state changes
     useEffect(() => {
@@ -314,7 +326,7 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
 
             // Check if we should transition to building phase
             // Only allow generation in requirements phase and if generation hasn't been triggered yet
-            if (currentPhase === 'requirements' && !hasTriggeredGeneration) {
+            if (currentPhase === 'requirements' && !hasTriggeredGeneration && !isGenerating) {
                 const aiResponseLower = aiResponse.toLowerCase();
                 const isConfirmedByText = aiResponseLower.includes('proceed to build') ||
                     aiResponseLower.includes('building your miniapp') ||
@@ -327,8 +339,7 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
                 if (isConfirmedByText || isConfirmedByAPI) {
                     console.log('✅ Project confirmation detected! Transitioning to building phase...');
                     setCurrentPhase('building');
-                    setHasTriggeredGeneration(true);
-                    setGenerationFlag(true); // Persist flag in sessionStorage to prevent duplicates across re-mounts
+                    // Note: hasTriggeredGeneration flag will be set in handleGenerateProject to prevent duplicates
 
                     // Use the AI's analysis as the final prompt
                     const finalPrompt = aiResponse;
@@ -371,6 +382,14 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
     };
 
     const handleGenerateProject = async (generationPrompt: string) => {
+        console.log('🔍 handleGenerateProject called:', {
+            hasPrompt: !!generationPrompt.trim(),
+            hasSessionToken: !!sessionToken,
+            isGenerating,
+            hasTriggeredGeneration,
+            currentPhase
+        });
+        
         if (!generationPrompt.trim() || !sessionToken || isGenerating || hasTriggeredGeneration) {
             // setError('Please enter a prompt');
             console.log('⚠️ Skipping project generation: invalid prompt, no session token, already generating, or generation already triggered');
@@ -385,9 +404,13 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
             // Set up abort controller for timeout handling
             const abortController = new AbortController();
             const timeoutId = setTimeout(() => {
-                console.log('⏰ Generation request timeout after 8 minutes');
+                console.log('⏰ Generation request timeout after 12 minutes');
                 abortController.abort();
-            }, 8 * 60 * 1000); // 8 minute timeout (less than server's 10min to fail gracefully)
+            }, 12 * 60 * 1000); // 12 minute timeout (safer than server's 10min)
+            
+            // Mark generation as triggered immediately to prevent duplicates
+            setHasTriggeredGeneration(true);
+            setGenerationFlag(true);
 
             const response = await fetch('/api/generate', {
                 method: 'POST',
@@ -479,7 +502,7 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
             
             if (err instanceof Error) {
                 if (err.name === 'AbortError') {
-                    errorMessage = 'Generation request timed out. The server might be overloaded. Please try again.';
+                    errorMessage = 'Generation request timed out after 12 minutes. The server might be overloaded. Please try again.';
                 } else {
                     errorMessage = err.message;
                 }
