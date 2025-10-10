@@ -944,6 +944,60 @@ FRONTEND INTEGRATION:
 - TypeScript types from ABIs, wagmi hooks (useContractRead/Write/WaitForTransaction)
 - Handle tx states: idle→loading→success/error, show progress, estimate gas, cache reads
 
+WAGMI TYPE REQUIREMENTS (CRITICAL - BUILD WILL FAIL IF VIOLATED):
+🚨 MANDATORY: Contract addresses MUST use \`0x\${string}\` type assertion
+🚨 MANDATORY: ABIs MUST use 'as const' assertion
+🚨 MANDATORY: Never spread config objects directly into wagmi hooks without proper types
+
+CORRECT PATTERNS:
+✅ Contract config with type assertions:
+const CONTRACT_CONFIG = {
+  address: '0x0000000000000000000000000000000000000000' as \`0x\${string}\`,
+  abi: [...] as const,
+  chainId: 84532
+} as const;
+
+✅ Using useReadContract:
+const { data } = useReadContract({
+  address: CONTRACT_CONFIG.address,  // Already typed as \`0x\${string}\`
+  abi: CONTRACT_CONFIG.abi,
+  functionName: 'getData',
+  enabled: CONTRACT_CONFIG.address !== '0x0000000000000000000000000000000000000000',
+});
+
+✅ Using useWriteContract:
+const { writeContract } = useWriteContract();
+const handleWrite = () => {
+  writeContract({
+    address: CONTRACT_ADDRESS as \`0x\${string}\`,
+    abi: CONTRACT_ABI,
+    functionName: 'myFunction',
+    args: [arg1, arg2],
+  });
+};
+
+✅ Dynamic address (after deployment):
+const { data } = useReadContract({
+  address: contractAddress as \`0x\${string}\`,  // Cast runtime value
+  abi: CONTRACT_ABI,
+  functionName: 'getUserData',
+  args: userAddress ? [userAddress] : undefined,
+  enabled: !!contractAddress && !!userAddress,
+});
+
+INCORRECT PATTERNS (WILL CAUSE BUILD FAILURE):
+❌ Missing type assertion on address:
+const CONTRACT_CONFIG = {
+  address: '0x...',  // Wrong: inferred as 'string', not '\`0x\${string}\`'
+  abi: [...]
+};
+
+❌ Spreading config without types:
+const { data } = useReadContract({
+  ...CONTRACT_CONFIG,  // Wrong: address type doesn't match
+  functionName: 'getData',
+});
+
 ESLINT COMPLIANCE (CRITICAL - BUILD WILL FAIL IF VIOLATED):
 - Remove unused variables from destructuring: const { used, unused } = hook() → const { used } = hook()
 - IMPORT HANDLING: Only remove imports that are TRULY unused - check if imported items are used anywhere in the file
