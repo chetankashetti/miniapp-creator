@@ -458,6 +458,27 @@ export async function POST(request: NextRequest) {
 
   try {
     logApiRequest('POST', '/api/generate', { requestId, startTime });
+
+    // TEST MODE: Quick return for debugging duplicate calls
+    const testMode = request.headers.get("X-Test-Quick-Return") === "true";
+    if (testMode) {
+      console.log(`🧪 TEST MODE: Request ${requestId} - Returning after 30 seconds`);
+      await new Promise(resolve => setTimeout(resolve, 30000)); // Wait 30 seconds
+
+      return NextResponse.json({
+        projectId: uuidv4(),
+        url: "https://test-mode.example.com",
+        port: 3000,
+        success: true,
+        generatedFiles: ["test.ts"],
+        pipeline: "test-mode",
+        changesApplied: true,
+        reason: "Test mode - quick return",
+        totalFiles: 1,
+        testMode: true,
+        requestId
+      });
+    }
     
     // Check for auth bypass (testing only)
     const bypassAuth = request.headers.get("X-Bypass-Auth") === "true";

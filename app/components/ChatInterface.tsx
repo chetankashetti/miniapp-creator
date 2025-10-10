@@ -494,11 +494,19 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
 
             // No timeout - let it run as long as needed
             // Client-side flags prevent duplicates (isGenerating, hasTriggeredGeneration)
+
+            // TEST MODE: Add this header to enable quick 30-second return for debugging
+            const testQuickReturn = window.localStorage.getItem('minidev_test_quick_return') === 'true';
+            if (testQuickReturn) {
+                console.log('🧪 TEST MODE ENABLED: API will return after 30 seconds');
+            }
+
             const response = await fetch('/api/generate', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${sessionToken}`
+                    'Authorization': `Bearer ${sessionToken}`,
+                    ...(testQuickReturn && { 'X-Test-Quick-Return': 'true' })
                 },
                 body: JSON.stringify({
                     prompt: generationPrompt,
