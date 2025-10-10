@@ -180,33 +180,18 @@ export function DevelopmentLogs({ onComplete }: DevelopmentLogsProps) {
                     </div>
                 </div>
 
-                {/* Tip Pagination Dots */}
-                <div className="flex justify-center space-x-2 mb-6">
+                {/* Simplified Pagination - Tips only (Stage progress shown above) */}
+                <div className="flex justify-center space-x-2">
                     {TIPS.map((_, index) => (
                         <button
                             key={index}
                             onClick={() => setCurrentTipIndex(index)}
-                            className={`w-2.5 h-2.5 rounded-full transition-all duration-300 ${
+                            className={`w-2 h-2 rounded-full transition-all duration-300 ${
                                 index === currentTipIndex
-                                    ? 'bg-blue-600 scale-125 shadow-lg'
-                                    : 'bg-gray-300 hover:bg-gray-400 hover:scale-110'
+                                    ? 'bg-blue-600 scale-125'
+                                    : 'bg-gray-300 hover:bg-gray-400'
                             }`}
                             aria-label={`Show tip ${index + 1}`}
-                        />
-                    ))}
-                </div>
-
-                {/* Stage Indicators */}
-                <div className="flex justify-center space-x-2">
-                    {BUILDING_STAGES.map((stage, index) => (
-                        <div
-                            key={index}
-                            className={`transition-all duration-500 ${
-                                index <= currentStage
-                                    ? 'w-3 h-3 bg-blue-600 rounded-full scale-110 shadow-md'
-                                    : 'w-2 h-2 bg-gray-300 rounded-full'
-                            }`}
-                            title={stage.text}
                         />
                     ))}
                 </div>
