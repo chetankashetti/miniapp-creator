@@ -117,13 +117,13 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
     // Load chat messages when project changes
     useEffect(() => {
         const loadChatMessages = async () => {
-            console.log('🔍 ChatInterface useEffect triggered:', { 
-                currentProject: currentProject?.projectId, 
+            console.log('🔍 ChatInterface useEffect triggered:', {
+                currentProject: currentProject?.projectId,
                 sessionToken: !!sessionToken,
                 currentPhase,
                 timestamp: new Date().toISOString()
             });
-            
+
             if (currentProject?.projectId && sessionToken) {
                 // Set phase to 'editing' when an existing project is loaded
                 if (currentPhase !== 'editing') {
@@ -132,7 +132,7 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
                 } else {
                     console.log('🔍 Phase already set to editing, skipping');
                 }
-                
+
                 try {
                     // Use the main chat API to get messages for this project
                     const response = await fetch(`/api/chat?projectId=${currentProject.projectId}`, {
@@ -155,11 +155,13 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
                 } catch (error) {
                     console.warn('Failed to load chat messages:', error);
                 }
-            } else if (!currentProject) {
-                // Reset phase to 'requirements' when no project is selected
+            } else if (!currentProject && currentPhase === 'editing') {
+                // Only reset phase if we're in editing mode and project is cleared
+                // Don't reset during building phase to avoid interrupting generation
+                console.log('🔄 Project cleared, resetting phase to requirements');
                 setCurrentPhase('requirements');
             }
-            
+
             // Add welcome message when no project or no messages
             if (chat.length === 0 && !aiLoading) {
                 setChat([{
@@ -172,7 +174,8 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
         };
 
         loadChatMessages();
-    }, [currentProject, sessionToken, currentPhase, chat.length, aiLoading]);
+        // REMOVED currentPhase from dependencies to prevent reset loop during generation
+    }, [currentProject, sessionToken, chat.length, aiLoading]);
 
     // Show warning message once when user hasn't started chatting
     useEffect(() => {
@@ -387,7 +390,13 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
                 const isConfirmedByAPI = data.projectConfirmed === true;
 
                 if (isConfirmedByText || isConfirmedByAPI) {
-                    console.log('✅ Project confirmation detected! Transitioning to building phase...');
+                    console.log('✅ Project confirmation detected! Transitioning to building phase...', {
+                        isConfirmedByText,
+                        isConfirmedByAPI,
+                        hasTriggeredGeneration,
+                        isGenerating,
+                        existingTimeout: !!generationTimeoutRef.current
+                    });
                     setCurrentPhase('building');
 
                     // Note: hasTriggeredGeneration flag will be set in handleGenerateProject to prevent duplicates
@@ -405,9 +414,11 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
 
                     // Store timeout reference for cleanup
                     generationTimeoutRef.current = setTimeout(() => {
+                        console.log('⏰ Timeout fired, calling handleGenerateProject');
                         handleGenerateProject(aiResponse);
                         generationTimeoutRef.current = null; // Clear ref after execution
                     }, 1000);
+                    console.log('⏰ Generation timeout scheduled for 1 second');
                 }
             } else {
                 // Log why generation is not allowed
@@ -516,8 +527,11 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
             // Chat messages are already in the right place! No migration needed
             // because /api/chat created the project first and saved messages there
 
+            console.log('✅ Generation complete, updating UI state...');
             onProjectGenerated(project);
+            console.log('✅ Project state updated via onProjectGenerated');
             setCurrentPhase('editing');
+            console.log('✅ Phase set to editing');
 
             // Keep generation locks set to prevent duplicate generations
             // Once a project is generated, we should not allow further generation
