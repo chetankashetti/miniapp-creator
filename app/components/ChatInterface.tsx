@@ -43,6 +43,10 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
     const chatContainerRef = useRef<HTMLDivElement>(null);
     const { sessionToken } = useAuthContext();
 
+    // Ref-based lock to prevent race conditions (synchronous, unlike state)
+    const isGeneratingRef = useRef(false);
+    const generationTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
 
     // Chat session state - persist chatSessionId in sessionStorage to survive re-mounts
     const [chatSessionId] = useState<string>(() => {
@@ -213,6 +217,17 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
         return () => clearInterval(interval);
     }, []);
 
+    // Cleanup timeout on unmount to prevent memory leaks and duplicate calls
+    useEffect(() => {
+        return () => {
+            if (generationTimeoutRef.current) {
+                console.log('🧹 Cleaning up generation timeout on unmount');
+                clearTimeout(generationTimeoutRef.current);
+                generationTimeoutRef.current = null;
+            }
+        };
+    }, []);
+
     const handleSendMessage = async (userMessage: string) => {
         if (!chatSessionId || !sessionToken) return;
         // setPrompt('');
@@ -362,7 +377,7 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
 
             // Check if we should transition to building phase
             // Only allow generation in requirements phase and if generation hasn't been triggered yet
-            if (currentPhase === 'requirements' && !hasTriggeredGeneration && !isGenerating) {
+            if (currentPhase === 'requirements' && !hasTriggeredGeneration && !isGenerating && !isGeneratingRef.current) {
                 const aiResponseLower = aiResponse.toLowerCase();
                 const isConfirmedByText = aiResponseLower.includes('proceed to build') ||
                     aiResponseLower.includes('building your miniapp') ||
@@ -375,14 +390,27 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
                 if (isConfirmedByText || isConfirmedByAPI) {
                     console.log('✅ Project confirmation detected! Transitioning to building phase...');
                     setCurrentPhase('building');
+
+                    // Set ref lock immediately (synchronous) to prevent any race conditions
+                    isGeneratingRef.current = true;
+
                     // Note: hasTriggeredGeneration flag will be set in handleGenerateProject to prevent duplicates
 
                     // Use the AI's analysis as the final prompt
                     const finalPrompt = aiResponse;
 
                     console.log('🚀 Triggering project generation with AI analysis:', finalPrompt.substring(0, 200) + '...');
-                    setTimeout(() => {
+
+                    // Clear any existing timeout before scheduling a new one
+                    if (generationTimeoutRef.current) {
+                        clearTimeout(generationTimeoutRef.current);
+                        console.log('🧹 Cleared existing generation timeout to prevent duplicates');
+                    }
+
+                    // Store timeout reference for cleanup
+                    generationTimeoutRef.current = setTimeout(() => {
                         handleGenerateProject(aiResponse);
+                        generationTimeoutRef.current = null; // Clear ref after execution
                     }, 1000);
                 }
             } else {
@@ -400,6 +428,7 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
             console.error('Error:', err);
             // Reset generation locks on error to allow retry
             console.log('🔓 Resetting generation locks due to chat error');
+            isGeneratingRef.current = false;
             setHasTriggeredGeneration(false);
             setGlobalGenerationLock(false);
             // setError(err instanceof Error ? err.message : 'An error occurred');
@@ -426,27 +455,38 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
             hasPrompt: !!generationPrompt.trim(),
             hasSessionToken: !!sessionToken,
             isGenerating,
+            isGeneratingRef: isGeneratingRef.current,
             hasTriggeredGeneration,
             existingLock: !!existingLock,
             currentPhase,
             timestamp: new Date().toISOString()
         });
 
-        // Multiple layers of protection against duplicates
-        if (!generationPrompt.trim() || !sessionToken || isGenerating || hasTriggeredGeneration || existingLock) {
+        // Multiple layers of protection against duplicates - CHECK REF FIRST (synchronous)
+        if (!generationPrompt.trim() || !sessionToken || isGeneratingRef.current || isGenerating || hasTriggeredGeneration || existingLock) {
             console.log('⚠️ Skipping project generation:', {
                 reason: !generationPrompt.trim() ? 'no prompt' :
                         !sessionToken ? 'no session token' :
+                        isGeneratingRef.current ? 'ref lock active' :
                         isGenerating ? 'already generating' :
                         hasTriggeredGeneration ? 'already triggered' :
                         existingLock ? 'global lock exists' : 'unknown',
                 existingLockData: existingLock
             });
+
+            // Reset ref if we're skipping due to duplicate call attempt
+            if (isGeneratingRef.current && (isGenerating || hasTriggeredGeneration || existingLock)) {
+                console.log('🔓 Ref was set but other locks also exist - keeping locks');
+            }
             return;
         }
 
         console.log('🚀 Starting project generation...');
+
+        // Set ALL locks immediately (ref is synchronous and prevents race conditions)
+        isGeneratingRef.current = true;
         setIsGenerating(true);
+
         // setError(null);
         try {
             console.log('🚀 Setting generation locks with prompt:', generationPrompt.substring(0, 200) + '...');
@@ -548,6 +588,7 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
 
             // Reset all locks to allow retry
             console.log('🔓 Resetting generation locks due to error');
+            isGeneratingRef.current = false;
             setHasTriggeredGeneration(false);
             setGlobalGenerationLock(false);
         } finally {
