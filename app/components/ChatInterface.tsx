@@ -289,6 +289,10 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
                         }
                         return newChat;
                     });
+                } finally {
+                    // IMPORTANT: Reset aiLoading before early return
+                    setAiLoading(false);
+                    setPrompt('');
                 }
 
                 return; // Skip the rest of the function since we handled the editing phase
@@ -403,25 +407,21 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
         try {
             console.log('🚀 Starting generation with prompt:', generationPrompt.substring(0, 200) + '...');
 
-            // Set up abort controller for timeout handling
-            const abortController = new AbortController();
-            const timeoutId = setTimeout(() => {
-                console.log('⏰ Generation request timeout after 12 minutes');
-                abortController.abort();
-            }, 12 * 60 * 1000); // 12 minute timeout (safer than server's 10min)
-            
             // Mark generation as triggered immediately to prevent duplicates
             setHasTriggeredGeneration(true);
             setGenerationFlag(true);
 
+            // No timeout - let it run as long as needed
+            // Client-side flags prevent duplicates (isGenerating, hasTriggeredGeneration)
             const response = await fetch('/api/generate', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${sessionToken}` },
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${sessionToken}`
+                },
                 body: JSON.stringify({ prompt: generationPrompt }),
-                signal: abortController.signal,
             });
 
-            clearTimeout(timeoutId);
             if (!response.ok) {
                 const errorData = await response.json();
                 const errorMessage = errorData.details || errorData.error || 'Failed to generate project';
@@ -500,18 +500,8 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
                 }
             }
         } catch (err) {
-            let errorMessage = 'An error occurred';
-            let isTimeout = false;
-            
-            if (err instanceof Error) {
-                if (err.name === 'AbortError') {
-                    errorMessage = 'Generation request timed out after 12 minutes. The server might be overloaded. Please try again.';
-                    isTimeout = true;
-                } else {
-                    errorMessage = err.message;
-                }
-            }
-            
+            const errorMessage = err instanceof Error ? err.message : 'An error occurred';
+
             console.error('Generation failed:', errorMessage);
             // setError(errorMessage);
             setChat(prev => [
@@ -523,17 +513,10 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
                     timestamp: Date.now()
                 }
             ]);
-            
-            // Reset flags only for non-timeout errors to allow retry
-            if (!isTimeout) {
-                setHasTriggeredGeneration(false);
-                setGenerationFlag(false);
-            } else {
-                // For timeout errors, reset phase to requirements and keep flags set
-                console.log('⏰ Timeout occurred - resetting phase to requirements but keeping generation flags');
-                setCurrentPhase('requirements');
-                // Keep generation flags set to prevent duplicate requests
-            }
+
+            // Reset flags to allow retry
+            setHasTriggeredGeneration(false);
+            setGenerationFlag(false);
         } finally {
             setIsGenerating(false);
             // Don't reset generation flags here - handle in catch block based on error type
@@ -662,12 +645,26 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
                     ))}
                     {aiLoading && (
                         <div className="flex justify-start">
-                            <div className="rounded-lg px-4 py-2 max-w-[80%] text-sm bg-transparent text-black">
-                                <div className="flex items-center gap-2">
-                                    <div className="flex items-center gap-2 text-gray-600">
-                                        <div className="animate-spin h-4 w-4 border-2 border-gray-600 border-t-transparent rounded-full"></div>
-                                        <span>Thinking...</span>
+                            <div className="rounded-lg px-4 py-3 max-w-[80%] bg-gradient-to-r from-gray-50 to-gray-100 border border-gray-200 shadow-sm">
+                                <div className="flex items-center gap-3">
+                                    {/* Bouncing dots animation */}
+                                    <div className="flex gap-1.5">
+                                        <div
+                                            className="w-2 h-2 bg-gray-600 rounded-full animate-bounce"
+                                            style={{ animationDelay: '0ms', animationDuration: '1000ms' }}
+                                        ></div>
+                                        <div
+                                            className="w-2 h-2 bg-gray-600 rounded-full animate-bounce"
+                                            style={{ animationDelay: '150ms', animationDuration: '1000ms' }}
+                                        ></div>
+                                        <div
+                                            className="w-2 h-2 bg-gray-600 rounded-full animate-bounce"
+                                            style={{ animationDelay: '300ms', animationDuration: '1000ms' }}
+                                        ></div>
                                     </div>
+                                    <span className="text-sm text-gray-700 font-medium animate-pulse">
+                                        Thinking...
+                                    </span>
                                 </div>
                             </div>
                         </div>
