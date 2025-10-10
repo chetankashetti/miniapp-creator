@@ -1038,10 +1038,16 @@ export async function PATCH(request: NextRequest) {
       // Write changes to generated directory
       await writeFilesToDir(userDir, result.files);
 
-      // Update files in the preview
-      console.log("Updating files in preview...");
-      await updatePreviewFiles(projectId, result.files, accessToken);
-      console.log("Preview files updated successfully");
+      // Update files in the preview (optional - may not be supported on Railway)
+      try {
+        console.log("Updating files in preview...");
+        await updatePreviewFiles(projectId, result.files, accessToken);
+        console.log("Preview files updated successfully");
+      } catch (previewError) {
+        console.warn("⚠️  Failed to update preview files (this is expected on Railway):", previewError);
+        console.log("📁 Files have been saved locally and to database");
+        // Don't fail the request - preview updates are optional
+      }
 
       // Update project files in database
       try {
@@ -1167,10 +1173,16 @@ export async function PATCH(request: NextRequest) {
       // Write changes to generated directory
       await writeFilesToDir(userDir, generatedFiles);
 
-      // Update files in the preview
-      console.log("Updating files in preview...");
-      await updatePreviewFiles(projectId, generatedFiles, accessToken);
-      console.log("Preview files updated successfully");
+      // Update files in the preview (optional - may not be supported on Railway)
+      try {
+        console.log("Updating files in preview...");
+        await updatePreviewFiles(projectId, generatedFiles, accessToken);
+        console.log("Preview files updated successfully");
+      } catch (previewError) {
+        console.warn("⚠️  Failed to update preview files (this is expected on Railway):", previewError);
+        console.log("📁 Files have been saved locally and to database");
+        // Don't fail the request - preview updates are optional
+      }
 
       // Update project files in database
       try {
