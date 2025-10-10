@@ -45,7 +45,7 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
 
 
     // Chat session state - persist chatSessionId in sessionStorage to survive re-mounts
-    const [chatSessionId, setChatSessionId] = useState<string>(() => {
+    const [chatSessionId] = useState<string>(() => {
         try {
             const stored = sessionStorage.getItem('minidev_chat_session_id');
             if (stored) return stored;
@@ -162,7 +162,7 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
         };
 
         loadChatMessages();
-    }, [currentProject, sessionToken, currentPhase]); // Removed chat.length and aiLoading to prevent duplicate triggers
+    }, [currentProject, sessionToken, currentPhase, chat.length, aiLoading]);
 
     // Show warning message once when user hasn't started chatting
     useEffect(() => {

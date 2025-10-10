@@ -110,6 +110,37 @@ export class RailwayValidationClient {
         console.log(`✅ Success: ${response.success}`);
         console.log(`❌ Errors: ${response.errors?.length || 0}`);
         console.log(`⚠️  Warnings: ${response.warnings?.length || 0}`);
+        
+        // Log detailed response for debugging
+        console.log(`📋 Full validation response:`, JSON.stringify(response, null, 2));
+        
+        // Log error details if present
+        if (response.errors && response.errors.length > 0) {
+          console.log(`🔍 Error details:`);
+          response.errors.forEach((error, index) => {
+            console.log(`  ${index + 1}. ${error.file}:${error.line}:${error.column} - ${error.message}`);
+            if (error.severity) console.log(`     Severity: ${error.severity}, Category: ${error.category}`);
+          });
+        }
+        
+        // Log warning details if present
+        if (response.warnings && response.warnings.length > 0) {
+          console.log(`⚠️  Warning details:`);
+          response.warnings.forEach((warning, index) => {
+            console.log(`  ${index + 1}. ${warning.file}:${warning.line}:${warning.column} - ${warning.message}`);
+            if (warning.severity) console.log(`     Severity: ${warning.severity}, Category: ${warning.category}`);
+          });
+        }
+        
+        // Log validation summary if present
+        if (response.validationSummary) {
+          console.log(`📊 Validation summary:`, response.validationSummary);
+        }
+        
+        // Log compilation time if present
+        if (response.compilationTime) {
+          console.log(`⏱️  Compilation time: ${response.compilationTime}ms`);
+        }
 
         return response as RailwayValidationResult;
 
@@ -117,6 +148,27 @@ export class RailwayValidationClient {
         const isLastAttempt = attempt === maxRetries;
         
         console.error(`❌ Railway validation attempt ${attempt} failed:`, error);
+        
+        // Log detailed error information
+        if (error instanceof Error) {
+          console.error(`🔍 Error details:`, {
+            message: error.message,
+            stack: error.stack,
+            name: error.name
+          });
+        } else {
+          console.error(`🔍 Error object:`, error);
+        }
+        
+        // Check if error has response data (HTTP error)
+        if (error && typeof error === 'object' && 'response' in error) {
+          const httpError = error as { response?: { status?: number; statusText?: string; data?: unknown } };
+          console.error(`🌐 HTTP Error Response:`, {
+            status: httpError.response?.status,
+            statusText: httpError.response?.statusText,
+            data: httpError.response?.data
+          });
+        }
         
         if (isLastAttempt) {
           console.error(`❌ All ${maxRetries} Railway validation attempts failed`);
@@ -376,10 +428,21 @@ export default eslintConfig;`;
 
       if (!response.ok) {
         const errorText = await response.text();
+        console.error(`🚨 Railway API HTTP Error:`);
+        console.error(`  Status: ${response.status} ${response.statusText}`);
+        console.error(`  URL: ${url}`);
+        console.error(`  Response Body: ${errorText}`);
         throw new Error(`Railway API error: ${response.status} ${response.statusText} - ${errorText}`);
       }
 
       const result = await response.json();
+      
+      // Log successful response details
+      console.log(`✅ Railway API request successful:`);
+      console.log(`  Status: ${response.status} ${response.statusText}`);
+      console.log(`  URL: ${url}`);
+      console.log(`  Response size: ${JSON.stringify(result).length} characters`);
+      
       return result;
 
     } catch (error) {
