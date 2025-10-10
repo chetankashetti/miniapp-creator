@@ -867,6 +867,12 @@ JSON FORMATTING:
 - Escape quotes as \\\", newlines as \\n, backslashes as \\\\
 - Example: "content": "'use client';\\n\\nimport { useState } from \\\"react\\\";\\n\\nconst Component = () => {\\n  const [state, setState] = useState();\\n  return <div>Hello</div>;\\n};"
 
+🚨 CRITICAL WARNING - COMMON MISTAKE WITH JSON FILES:
+When generating package.json or any .json file, it is STILL just a text string in the "content" field.
+❌ WRONG: Double-escaping like {\\\\n  \\\\\\\"name\\\\\\\": \\\\\\\"foo\\\\\\\"...
+✅ CORRECT: Single-escaping like {\\n  \\\"name\\\": \\\"foo\\\"...
+Treat JSON files identically to .tsx/.ts files - they all go in a string field with the same escaping!
+
 CODE GENERATION RULES:
 - Generate complete file contents based on patch plan descriptions
 - Use useUser hook: const { username, fid, isMiniApp, isLoading } = useUser()
@@ -1210,12 +1216,18 @@ __END_JSON__
 Nothing else before/after the markers. Do not include any explanatory text, comments, or additional content outside the JSON markers.
 
 JSON FORMATTING REQUIREMENTS:
-- ALL quotes inside content strings MUST be escaped as \\\" (double backslash + quote)
-- ALL newlines inside content strings MUST be escaped as \\n
-- ALL backslashes must be escaped as \\\\
+- Escape quotes as \\\" (backslash + quote, NOT double backslash + quote)
+- Escape newlines as \\n (backslash + n)
+- Escape backslashes as \\\\ (double backslash becomes single)
 - Content must be a single-line string with proper escaping
 - unifiedDiff content must also be properly escaped
 - Example: "content": "const { ethers } = require(\\\"hardhat\\\");\\n\\nasync function main() {\\n  console.log(\\\"Hello\\\");\\n}"
+
+🚨 CRITICAL - COMMON MISTAKE WITH JSON FILES:
+When generating package.json or any .json file in the "content" field, use the SAME escaping as .ts/.tsx files.
+❌ WRONG: {\\\\n  \\\\\\\"name\\\\\\\": ... (double-escaped)
+✅ CORRECT: {\\n  \\\"name\\\": ... (single-escaped)
+JSON files are plain text strings just like TypeScript files!
 
 CODE GENERATION RULES:
 - For existing files: Modify current content based on patch plan
