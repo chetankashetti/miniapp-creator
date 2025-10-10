@@ -43,8 +43,7 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
     const chatContainerRef = useRef<HTMLDivElement>(null);
     const { sessionToken } = useAuthContext();
 
-    // Ref-based lock to prevent race conditions (synchronous, unlike state)
-    const isGeneratingRef = useRef(false);
+    // Timeout ref for cleanup to prevent duplicate calls
     const generationTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
 
@@ -377,7 +376,7 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
 
             // Check if we should transition to building phase
             // Only allow generation in requirements phase and if generation hasn't been triggered yet
-            if (currentPhase === 'requirements' && !hasTriggeredGeneration && !isGenerating && !isGeneratingRef.current) {
+            if (currentPhase === 'requirements' && !hasTriggeredGeneration && !isGenerating) {
                 const aiResponseLower = aiResponse.toLowerCase();
                 const isConfirmedByText = aiResponseLower.includes('proceed to build') ||
                     aiResponseLower.includes('building your miniapp') ||
@@ -391,9 +390,6 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
                     console.log('✅ Project confirmation detected! Transitioning to building phase...');
                     setCurrentPhase('building');
 
-                    // Set ref lock immediately (synchronous) to prevent any race conditions
-                    isGeneratingRef.current = true;
-
                     // Note: hasTriggeredGeneration flag will be set in handleGenerateProject to prevent duplicates
 
                     // Use the AI's analysis as the final prompt
@@ -401,7 +397,7 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
 
                     console.log('🚀 Triggering project generation with AI analysis:', finalPrompt.substring(0, 200) + '...');
 
-                    // Clear any existing timeout before scheduling a new one
+                    // Clear any existing timeout before scheduling a new one to prevent duplicates
                     if (generationTimeoutRef.current) {
                         clearTimeout(generationTimeoutRef.current);
                         console.log('🧹 Cleared existing generation timeout to prevent duplicates');
@@ -428,7 +424,6 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
             console.error('Error:', err);
             // Reset generation locks on error to allow retry
             console.log('🔓 Resetting generation locks due to chat error');
-            isGeneratingRef.current = false;
             setHasTriggeredGeneration(false);
             setGlobalGenerationLock(false);
             // setError(err instanceof Error ? err.message : 'An error occurred');
@@ -455,36 +450,26 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
             hasPrompt: !!generationPrompt.trim(),
             hasSessionToken: !!sessionToken,
             isGenerating,
-            isGeneratingRef: isGeneratingRef.current,
             hasTriggeredGeneration,
             existingLock: !!existingLock,
             currentPhase,
             timestamp: new Date().toISOString()
         });
 
-        // Multiple layers of protection against duplicates - CHECK REF FIRST (synchronous)
-        if (!generationPrompt.trim() || !sessionToken || isGeneratingRef.current || isGenerating || hasTriggeredGeneration || existingLock) {
+        // Multiple layers of protection against duplicates
+        if (!generationPrompt.trim() || !sessionToken || isGenerating || hasTriggeredGeneration || existingLock) {
             console.log('⚠️ Skipping project generation:', {
                 reason: !generationPrompt.trim() ? 'no prompt' :
                         !sessionToken ? 'no session token' :
-                        isGeneratingRef.current ? 'ref lock active' :
                         isGenerating ? 'already generating' :
                         hasTriggeredGeneration ? 'already triggered' :
                         existingLock ? 'global lock exists' : 'unknown',
                 existingLockData: existingLock
             });
-
-            // Reset ref if we're skipping due to duplicate call attempt
-            if (isGeneratingRef.current && (isGenerating || hasTriggeredGeneration || existingLock)) {
-                console.log('🔓 Ref was set but other locks also exist - keeping locks');
-            }
             return;
         }
 
         console.log('🚀 Starting project generation...');
-
-        // Set ALL locks immediately (ref is synchronous and prevents race conditions)
-        isGeneratingRef.current = true;
         setIsGenerating(true);
 
         // setError(null);
@@ -533,11 +518,9 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
 
             onProjectGenerated(project);
             setCurrentPhase('editing');
-            
-            // Reset ref lock on success (allows component to be reused)
-            // Keep state-based locks (hasTriggeredGeneration, globalGenerationLock) to prevent duplicate generations
+
+            // Keep generation locks set to prevent duplicate generations
             // Once a project is generated, we should not allow further generation
-            isGeneratingRef.current = false;
             // setHasTriggeredGeneration(false); // Intentionally kept locked
             // setGlobalGenerationLock(false);   // Intentionally kept locked
 
@@ -590,7 +573,6 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
 
             // Reset all locks to allow retry
             console.log('🔓 Resetting generation locks due to error');
-            isGeneratingRef.current = false;
             setHasTriggeredGeneration(false);
             setGlobalGenerationLock(false);
         } finally {
