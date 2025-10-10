@@ -57,12 +57,12 @@ export function Preview({ currentProject, onProjectSelect, onNewProject }: Previ
                         <div className="text-6xl mb-4">🚀</div>
                         <h3 className="text-xl font-semibold text-black mb-2">No Deployment Yet</h3>
                         <p className="text-sm text-black-60 mb-6">
-                            This project hasn't been deployed yet. Use the chat to make changes and deploy your app.
+                            This project hasn&apos;t been deployed yet. Use the chat to make changes and deploy your app.
                         </p>
                         <div className="bg-black-5 rounded-lg p-4 text-left">
                             <p className="text-xs text-black-60 font-medium mb-2">💡 Tip:</p>
                             <p className="text-xs text-black-60">
-                                Ask the AI to "deploy this project" or make changes to trigger a deployment.
+                                Ask the AI to &quot;deploy this project&quot; or make changes to trigger a deployment.
                             </p>
                         </div>
                     </div>
