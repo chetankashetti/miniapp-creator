@@ -930,6 +930,25 @@ NFT/TOKEN CONTRACTS:
 - Track ownership: mapping(address => mapping(uint256 => bool)) userOwnsType
 - Use counters for IDs, OpenZeppelin imports for standards
 
+🚨 CRITICAL: CONTRACT ACCESS CONTROL PATTERNS (ANALYZE USER REQUIREMENT CAREFULLY):
+PUBLIC MINTING (users can mint):
+- User says: "free mint", "anyone can mint", "public minting", "one-click mint"
+- Pattern: Remove 'onlyOwner' modifier from mint functions OR add separate public mint function
+- Example: function publicMint(address to, string memory tokenUri) public { ... }
+- Add minting limits: mapping(address => uint256) public mintCount; require(mintCount[msg.sender] < MAX_PER_WALLET)
+
+OWNER-ONLY MINTING (admin controls):
+- User says: "admin mints", "controlled minting", "airdrop only"
+- Pattern: Keep 'onlyOwner' modifier on mint functions
+- Example: function safeMint(address to, string memory tokenUri) public onlyOwner { ... }
+
+PAID MINTING (users pay to mint):
+- User says: "paid mint", "mint for 0.01 ETH", "selling NFTs"
+- Pattern: function mint() public payable { require(msg.value >= MINT_PRICE); ... }
+- Add withdraw function for owner to collect funds
+
+ALWAYS CHECK: If user wants "free minting" or "gallery with mint buttons", use PUBLIC MINTING pattern!
+
 SOLIDITY:
 - Use require() with descriptive errors, comprehensive events with indexed params
 - Gas optimize: appropriate types, pack structs, memory/calldata correctly
@@ -944,6 +963,25 @@ FRONTEND INTEGRATION:
 - TypeScript types from ABIs, wagmi hooks (useContractRead/Write/WaitForTransaction)
 - Handle tx states: idle→loading→success/error, show progress, estimate gas, cache reads
 
+BIGINT USAGE (tsconfig.json target is ES2020, BigInt is supported):
+✅ Use BigInt literals for comparisons:
+if (balance !== 0n) { ... }  // Correct: use 0n, 1n, 2n syntax
+if (balance === 1n) { ... }
+
+✅ Convert contract return values (already BigInt):
+const amount = Number(contractData);  // For display only
+const count = contractData.toString();  // For display
+
+❌ Don't use BigInt() constructor for literals:
+if (balance === BigInt(0)) { ... }  // Wrong: use 0n instead
+if (balance !== BigInt(1)) { ... }  // Wrong: use 1n instead
+
+BEST PRACTICES:
+- Contract return values from wagmi are already BigInt type
+- Use literal syntax (0n, 1n, etc.) for comparisons
+- Convert to Number/String only for display purposes
+- Always handle BigInt in TypeScript with proper type guards
+
 WAGMI TYPE REQUIREMENTS (CRITICAL - BUILD WILL FAIL IF VIOLATED):
 🚨 MANDATORY: Contract addresses MUST use \`0x\${string}\` type assertion
 🚨 MANDATORY: ABIs MUST use 'as const' assertion
@@ -957,12 +995,25 @@ const CONTRACT_CONFIG = {
   chainId: 84532
 } as const;
 
-✅ Using useReadContract:
+✅ Using useReadContract with query config (IMPORTANT: use 'query' wrapper for enabled):
 const { data } = useReadContract({
   address: CONTRACT_CONFIG.address,  // Already typed as \`0x\${string}\`
   abi: CONTRACT_CONFIG.abi,
   functionName: 'getData',
-  enabled: CONTRACT_CONFIG.address !== '0x0000000000000000000000000000000000000000',
+  query: {
+    enabled: CONTRACT_CONFIG.address !== '0x0000000000000000000000000000000000000000',
+  },
+});
+
+✅ Using useReadContract with args and conditional execution:
+const { data } = useReadContract({
+  address: contractAddress as \`0x\${string}\`,
+  abi: CONTRACT_ABI,
+  functionName: 'getUserData',
+  args: userAddress ? [userAddress] : undefined,
+  query: {
+    enabled: !!contractAddress && !!userAddress,
+  },
 });
 
 ✅ Using useWriteContract:
@@ -976,15 +1027,6 @@ const handleWrite = () => {
   });
 };
 
-✅ Dynamic address (after deployment):
-const { data } = useReadContract({
-  address: contractAddress as \`0x\${string}\`,  // Cast runtime value
-  abi: CONTRACT_ABI,
-  functionName: 'getUserData',
-  args: userAddress ? [userAddress] : undefined,
-  enabled: !!contractAddress && !!userAddress,
-});
-
 INCORRECT PATTERNS (WILL CAUSE BUILD FAILURE):
 ❌ Missing type assertion on address:
 const CONTRACT_CONFIG = {
@@ -996,6 +1038,23 @@ const CONTRACT_CONFIG = {
 const { data } = useReadContract({
   ...CONTRACT_CONFIG,  // Wrong: address type doesn't match
   functionName: 'getData',
+});
+
+❌ Wrong query config - enabled at top level (WILL FAIL):
+const { data } = useReadContract({
+  address: CONTRACT_ADDRESS as \`0x\${string}\`,
+  abi: CONTRACT_ABI,
+  functionName: 'getData',
+  enabled: true,  // Wrong: must be wrapped in 'query' object
+});
+
+❌ Missing query wrapper:
+const { data } = useReadContract({
+  address: CONTRACT_ADDRESS as \`0x\${string}\`,
+  abi: CONTRACT_ABI,
+  functionName: 'getData',
+  args: [someArg],
+  enabled: !!someArg,  // Wrong: must be inside query: { enabled: !!someArg }
 });
 
 ESLINT COMPLIANCE (CRITICAL - BUILD WILL FAIL IF VIOLATED):
