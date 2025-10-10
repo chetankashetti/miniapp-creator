@@ -464,7 +464,15 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
                     'Content-Type': 'application/json',
                     'Authorization': `Bearer ${sessionToken}`
                 },
-                body: JSON.stringify({ prompt: generationPrompt }),
+                body: JSON.stringify({
+                    prompt: generationPrompt,
+                    projectId: chatProjectId || undefined  // Pass existing project ID for chat preservation
+                }),
+            });
+
+            console.log('📤 Sent /api/generate request with:', {
+                hasChatProjectId: !!chatProjectId,
+                chatProjectId
             });
 
             if (!response.ok) {
@@ -474,36 +482,15 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
                 throw new Error(errorMessage);
             }
             const project = await response.json();
-            
-            // Migrate chat messages from draft project to the new project
-            if (project.projectId && chatProjectId) {
-                try {
-                    console.log(`🔄 Migrating chat messages from ${chatProjectId} to ${project.projectId}`);
-                    const migrateResponse = await fetch('/api/chat', {
-                        method: 'PUT',
-                        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${sessionToken}` },
-                        body: JSON.stringify({ 
-                            fromProjectId: chatProjectId, 
-                            toProjectId: project.projectId 
-                        }),
-                    });
-                    
-                    if (migrateResponse.ok) {
-                        const migrateData = await migrateResponse.json();
-                        console.log(`✅ Chat messages migrated successfully: ${migrateData.migratedCount} messages`);
-                    } else {
-                        console.warn('⚠️ Failed to migrate chat messages:', await migrateResponse.text());
-                    }
-                } catch (error) {
-                    console.warn('⚠️ Error migrating chat messages:', error);
-                }
-            } else {
-                console.log('⚠️ Cannot migrate chat messages - missing project IDs:', { 
-                    newProjectId: project.projectId, 
-                    chatProjectId 
-                });
-            }
-            
+
+            console.log('📦 Project generated successfully:', {
+                projectId: project.projectId,
+                chatProjectIdMatches: project.projectId === chatProjectId
+            });
+
+            // Chat messages are already in the right place! No migration needed
+            // because /api/chat created the project first and saved messages there
+
             onProjectGenerated(project);
             setCurrentPhase('editing');
             

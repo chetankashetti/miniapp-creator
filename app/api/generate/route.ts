@@ -455,7 +455,7 @@ function generateProjectName(intentSpec: { feature: string; reason?: string }): 
 export async function POST(request: NextRequest) {
   const requestId = uuidv4();
   const startTime = Date.now();
-  
+
   try {
     logApiRequest('POST', '/api/generate', { requestId, startTime });
     
@@ -514,7 +514,7 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const { prompt, useMultiStage = true } = await request.json();
+    const { prompt, useMultiStage = true, projectId: existingProjectId } = await request.json();
     const accessToken = process.env.PREVIEW_AUTH_TOKEN;
     console.log("🔑 Preview auth token:", accessToken);
     if (!accessToken) {
@@ -556,15 +556,23 @@ export async function POST(request: NextRequest) {
       console.log(`📋 Full Prompt: ${prompt.substring(0, 200)}...`);
     }
 
-    // Generate unique project ID
-    const projectId = uuidv4();
+    // Use existing project ID if provided (for chat preservation), otherwise generate new one
+    const projectId = existingProjectId || uuidv4();
+
+    if (existingProjectId) {
+      console.log(`📦 Using existing project ID from chat: ${existingProjectId}`);
+    } else {
+      console.log(`🆕 Generated new project ID: ${projectId}`);
+    }
     
-    // Use /tmp directory for Vercel serverless environment
-    const outputDir = '/tmp/generated';
+    // Use local generated folder for development, /tmp/generated for production
+    const outputDir = process.env.NODE_ENV === 'production' 
+      ? '/tmp/generated' 
+      : path.join(process.cwd(), 'generated');
     const userDir = path.join(outputDir, projectId);
     const boilerplateDir = path.join(outputDir, `${projectId}-boilerplate`);
     
-    // Ensure /tmp/generated directory exists
+    // Ensure output directory exists
     fs.mkdirSync(outputDir, { recursive: true });
 
     console.log(`📁 Project ID: ${projectId}`);
@@ -832,12 +840,12 @@ export async function POST(request: NextRequest) {
   } catch (err) {
     const duration = Date.now() - startTime;
     logErrorWithContext(err as Error, 'Project generation request', requestId);
-    logger.error("Project generation failed", { 
-      requestId, 
-      duration, 
-      error: err instanceof Error ? err.message : String(err) 
+    logger.error("Project generation failed", {
+      requestId,
+      duration,
+      error: err instanceof Error ? err.message : String(err)
     });
-    
+
     return NextResponse.json(
       {
         error: "Failed to generate project",
@@ -940,11 +948,13 @@ export async function PATCH(request: NextRequest) {
       );
     }
 
-    // Use /tmp directory for Vercel serverless environment
-    const outputDir = '/tmp/generated';
+    // Use local generated folder for development, /tmp/generated for production
+    const outputDir = process.env.NODE_ENV === 'production' 
+      ? '/tmp/generated' 
+      : path.join(process.cwd(), 'generated');
     const userDir = path.join(outputDir, projectId);
     
-    // Ensure /tmp/generated directory exists
+    // Ensure output directory exists
     fs.mkdirSync(outputDir, { recursive: true });
 
     // Read all files in the project (excluding node_modules, .next, etc.)
