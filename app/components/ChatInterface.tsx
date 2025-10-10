@@ -534,10 +534,12 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
             onProjectGenerated(project);
             setCurrentPhase('editing');
             
-            // Keep generation lock set to prevent duplicate generations
+            // Reset ref lock on success (allows component to be reused)
+            // Keep state-based locks (hasTriggeredGeneration, globalGenerationLock) to prevent duplicate generations
             // Once a project is generated, we should not allow further generation
-            // setHasTriggeredGeneration(false);
-            // setGlobalGenerationLock(false);
+            isGeneratingRef.current = false;
+            // setHasTriggeredGeneration(false); // Intentionally kept locked
+            // setGlobalGenerationLock(false);   // Intentionally kept locked
 
             // Add generation success message to chat
             const aiMessage = project.generatedFiles && project.generatedFiles.length > 0
