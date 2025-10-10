@@ -1,18 +1,27 @@
 'use client';
 
 import { useState } from 'react';
-import { Copy, Check } from 'lucide-react';
+import { Copy, Check, AlertCircle } from 'lucide-react';
+import { useAuthContext } from '../contexts/AuthContext';
 
 interface PublishModalProps {
     isOpen: boolean;
     onClose: () => void;
     projectUrl?: string;
+    projectId?: string;
 }
 
-export function PublishModal({ isOpen, onClose, projectUrl }: PublishModalProps) {
+export function PublishModal({ isOpen, onClose, projectUrl, projectId }: PublishModalProps) {
     const [currentStep, setCurrentStep] = useState(1);
     const [copied, setCopied] = useState(false);
     const [domainCopied, setDomainCopied] = useState(false);
+    const [manifestJson, setManifestJson] = useState('');
+    const [isPublishing, setIsPublishing] = useState(false);
+    const [publishSuccess, setPublishSuccess] = useState(false);
+    const [publishError, setPublishError] = useState<string | null>(null);
+    const [manifestUrl, setManifestUrl] = useState<string | null>(null);
+    const [validationError, setValidationError] = useState<string | null>(null);
+    const { sessionToken } = useAuthContext();
 
     const handleCopyMessage = async () => {
         const message = 'Update the farcaster.json file with this manifest: [paste your manifest JSON here]';
@@ -34,6 +43,92 @@ export function PublishModal({ isOpen, onClose, projectUrl }: PublishModalProps)
             setTimeout(() => setDomainCopied(false), 2000);
         } catch (err) {
             console.error('Failed to copy domain: ', err);
+        }
+    };
+
+    const validateManifestJson = (jsonString: string): { valid: boolean; error?: string; manifest?: unknown } => {
+        try {
+            const manifest = JSON.parse(jsonString);
+
+            if (!manifest || typeof manifest !== 'object') {
+                return { valid: false, error: 'Manifest must be a valid JSON object' };
+            }
+
+            if (!manifest.accountAssociation) {
+                return { valid: false, error: 'Missing required field: accountAssociation' };
+            }
+
+            if (!manifest.miniapp && !manifest.frame) {
+                return { valid: false, error: 'Manifest must contain either "miniapp" or "frame" field' };
+            }
+
+            return { valid: true, manifest };
+        } catch (err) {
+            return { valid: false, error: 'Invalid JSON format' };
+        }
+    };
+
+    const handleValidate = () => {
+        const result = validateManifestJson(manifestJson);
+        if (result.valid) {
+            setValidationError(null);
+            setPublishError(null);
+        } else {
+            setValidationError(result.error || 'Invalid manifest');
+        }
+    };
+
+    const handlePublish = async () => {
+        if (!projectId || !sessionToken) {
+            setPublishError('Missing project information or authentication');
+            return;
+        }
+
+        const result = validateManifestJson(manifestJson);
+        if (!result.valid) {
+            setValidationError(result.error || 'Invalid manifest');
+            return;
+        }
+
+        setIsPublishing(true);
+        setPublishError(null);
+        setValidationError(null);
+
+        try {
+            const response = await fetch('/api/publish', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${sessionToken}`
+                },
+                body: JSON.stringify({
+                    projectId: projectId,
+                    manifest: result.manifest
+                })
+            });
+
+            const data = await response.json();
+
+            if (response.ok) {
+                setPublishSuccess(true);
+                setManifestUrl(data.manifestUrl);
+            } else {
+                setPublishError(data.error || 'Failed to publish manifest');
+            }
+        } catch (err) {
+            console.error('Error publishing manifest:', err);
+            setPublishError('Network error: Failed to publish manifest');
+        } finally {
+            setIsPublishing(false);
+        }
+    };
+
+    const handleCopyManifestUrl = async () => {
+        if (!manifestUrl) return;
+        try {
+            await navigator.clipboard.writeText(manifestUrl);
+        } catch (err) {
+            console.error('Failed to copy manifest URL: ', err);
         }
     };
 
@@ -179,15 +274,119 @@ export function PublishModal({ isOpen, onClose, projectUrl }: PublishModalProps)
         },
         {
             id: 2,
-            title: "Update Your App with the Manifest",
-            description: "Use the Minidev to update your farcaster.json file with the manifest.",
+            title: "Publish Your Manifest",
+            description: "Paste your manifest JSON and publish it to your app.",
             content: (
                 <div className="space-y-4">
 
+                    {/* Manifest Input Section */}
                     <div className="bg-gray-100 border border-gray-300 rounded-lg p-4">
-                        <h4 className="font-semibold text-gray-900 mb-3">Tell Minidev to Update Your App</h4>
+                        <h4 className="font-semibold text-gray-900 mb-3">Paste Your Manifest JSON</h4>
                         <p className="text-sm text-gray-800 mb-3">
-                            Once you have your manifest JSON from Farcaster, you need to tell Minidev to update your app with this information.
+                            Paste the complete manifest JSON you received from Farcaster Developer Tools in Step 1.
+                        </p>
+                        <textarea
+                            value={manifestJson}
+                            onChange={(e) => setManifestJson(e.target.value)}
+                            className="w-full h-48 p-3 border border-gray-300 rounded font-mono text-xs bg-white"
+                            placeholder='Paste your manifest JSON here, e.g.:
+{
+  "accountAssociation": {
+    "header": "...",
+    "payload": "...",
+    "signature": "..."
+  },
+  "miniapp": {
+    "version": "1",
+    "name": "Your App Name",
+    ...
+  }
+}'
+                            disabled={isPublishing || publishSuccess}
+                        />
+
+                        {/* Validation Error */}
+                        {validationError && (
+                            <div className="mt-3 p-3 bg-red-50 border border-red-200 rounded flex items-start gap-2">
+                                <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
+                                <div className="text-sm text-red-700">{validationError}</div>
+                            </div>
+                        )}
+
+                        {/* Publish Error */}
+                        {publishError && (
+                            <div className="mt-3 p-3 bg-red-50 border border-red-200 rounded flex items-start gap-2">
+                                <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
+                                <div className="text-sm text-red-700">{publishError}</div>
+                            </div>
+                        )}
+
+                        {/* Success Message */}
+                        {publishSuccess && manifestUrl && (
+                            <div className="mt-3 p-3 bg-green-50 border border-green-200 rounded">
+                                <div className="flex items-start gap-2 mb-2">
+                                    <Check className="w-5 h-5 text-green-600 flex-shrink-0 mt-0.5" />
+                                    <div className="text-sm text-green-700 font-semibold">Manifest published successfully!</div>
+                                </div>
+                                <div className="ml-7 text-sm text-green-700">
+                                    Your manifest is now live at:
+                                </div>
+                                <div className="ml-7 mt-2 flex items-center gap-2">
+                                    <code className="text-xs text-green-800 bg-green-100 p-2 rounded flex-1 break-all">
+                                        {manifestUrl}
+                                    </code>
+                                    <button
+                                        onClick={handleCopyManifestUrl}
+                                        className="p-2 hover:bg-green-200 rounded transition-colors duration-200"
+                                        title="Copy manifest URL"
+                                    >
+                                        <Copy className="w-4 h-4 text-green-600" />
+                                    </button>
+                                    <button
+                                        onClick={() => window.open(manifestUrl, '_blank')}
+                                        className="p-2 hover:bg-green-200 rounded transition-colors duration-200"
+                                        title="Open manifest"
+                                    >
+                                        <svg className="w-4 h-4 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                                        </svg>
+                                    </button>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Action Buttons */}
+                        <div className="mt-3 flex gap-2">
+                            <button
+                                onClick={handleValidate}
+                                disabled={!manifestJson || isPublishing || publishSuccess}
+                                className={`px-4 py-2 rounded font-medium transition-colors ${
+                                    !manifestJson || isPublishing || publishSuccess
+                                        ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                                        : 'bg-blue-500 text-white hover:bg-blue-600 cursor-pointer'
+                                }`}
+                            >
+                                Validate
+                            </button>
+                            <button
+                                onClick={handlePublish}
+                                disabled={!manifestJson || isPublishing || publishSuccess}
+                                className={`px-4 py-2 rounded font-medium transition-colors ${
+                                    !manifestJson || isPublishing || publishSuccess
+                                        ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                                        : 'bg-black text-white hover:bg-black-80 cursor-pointer'
+                                }`}
+                            >
+                                {isPublishing ? 'Publishing...' : publishSuccess ? 'Published' : 'Publish'}
+                            </button>
+                        </div>
+                    </div>
+
+                    {/* Alternative Manual Method */}
+                    <div className="bg-gray-100 border border-gray-300 rounded-lg p-4">
+                        <h4 className="font-semibold text-gray-900 mb-3">Alternative: Update via Chat</h4>
+                        <p className="text-sm text-gray-800 mb-3">
+                            You can also tell Minidev to update your app using the chat interface.
                         </p>
                         <div className="bg-white border border-green-300 rounded-lg p-4">
                             <h5 className="font-medium text-green-900 mb-2">Copy this message and paste it in the chat:</h5>

@@ -279,6 +279,7 @@ export function CodeEditorAndPreview({
                 isOpen={showPublishModal}
                 onClose={() => setShowPublishModal(false)}
                 projectUrl={currentProject?.url}
+                projectId={currentProject?.projectId}
             />
         </div>
     );
