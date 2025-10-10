@@ -366,17 +366,18 @@ export function CodeEditor({ currentProject, onFileChange }: CodeEditorProps) {
         };
     }, []);
 
-    // Monaco Editor load timeout - if Monaco doesn't load within 2 seconds, show fallback
+    // Monaco Editor load timeout - if Monaco doesn't load within 10 seconds, show fallback
     useEffect(() => {
         if (selectedFile && fileContent && !monacoError) {
             console.log('⏰ Starting Monaco load timeout for file:', selectedFile);
             const timeout = setTimeout(() => {
-                console.log('⏰ Monaco Editor load timeout - switching to fallback');
+                console.log('⏰ Monaco Editor load timeout (10s) - switching to fallback');
+                console.log('⏰ This means Monaco never called onMount()');
                 setMonacoError(true);
-            }, 2000); // 2 second timeout (reduced for faster fallback)
-            
+            }, 10000); // 10 second timeout - give Monaco plenty of time
+
             setMonacoLoadTimeout(timeout);
-            
+
             return () => {
                 if (timeout) {
                     clearTimeout(timeout);
@@ -586,20 +587,34 @@ export function CodeEditor({ currentProject, onFileChange }: CodeEditorProps) {
                                     </div>
                                 ) : fileContent && fileContent !== '// File not found or error loading content' && !fileContent.includes('timeout') && !fileContent.includes('Error loading') ? (
                                     !monacoError ? (
-                                        <MonacoEditor
-                                            height="100%"
-                                            language={getLanguage(selectedFile)}
-                                            value={fileContent}
-                                            onChange={handleFileChange}
-                                            onMount={() => {
-                                                console.log('✅ Monaco Editor mounted successfully');
-                                                setMonacoError(false);
-                                                // Clear the timeout since Monaco loaded successfully
-                                                if (monacoLoadTimeout) {
-                                                    clearTimeout(monacoLoadTimeout);
-                                                    setMonacoLoadTimeout(null);
+                                        <>
+                                            {console.log('🎯 Attempting to render Monaco Editor for:', selectedFile, 'monacoError:', monacoError)}
+                                            <MonacoEditor
+                                                height="100%"
+                                                language={getLanguage(selectedFile)}
+                                                value={fileContent}
+                                                onChange={handleFileChange}
+                                                loading={
+                                                    <div className="flex items-center justify-center h-full">
+                                                        <div className="text-sm text-gray-600">
+                                                            Loading Monaco Editor...
+                                                        </div>
+                                                    </div>
                                                 }
-                                            }}
+                                                onMount={(editor, monaco) => {
+                                                    console.log('✅ Monaco Editor mounted successfully!');
+                                                    console.log('✅ Editor instance:', !!editor);
+                                                    console.log('✅ Monaco instance:', !!monaco);
+                                                    setMonacoError(false);
+                                                    // Clear the timeout since Monaco loaded successfully
+                                                    if (monacoLoadTimeout) {
+                                                        clearTimeout(monacoLoadTimeout);
+                                                        setMonacoLoadTimeout(null);
+                                                    }
+                                                }}
+                                                onValidate={(markers) => {
+                                                    console.log('📊 Monaco validation markers:', markers.length);
+                                                }}
                                             beforeMount={(monaco) => {
                                                 try {
                                                     // Configure Monaco to work with CSP restrictions
@@ -629,6 +644,7 @@ export function CodeEditor({ currentProject, onFileChange }: CodeEditorProps) {
                                                 theme: 'vs-light'
                                             }}
                                         />
+                                        </>
                                     ) : (
                                         <div className="flex-1 flex flex-col">
                                             <div className="text-xs text-gray-500 p-2 border-b bg-blue-50 flex items-center justify-between">
