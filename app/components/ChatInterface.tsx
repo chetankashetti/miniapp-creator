@@ -81,15 +81,22 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
     const setGlobalGenerationLock = (value: boolean) => {
         try {
             if (value) {
-                sessionStorage.setItem('minidev_generation_lock', JSON.stringify({
+                const lockData = {
                     timestamp: Date.now(),
                     sessionId: chatSessionId
-                }));
+                };
+                console.log('🔒 SETTING generation lock:', lockData);
+                sessionStorage.setItem('minidev_generation_lock', JSON.stringify(lockData));
+
+                // Verify it was written
+                const written = sessionStorage.getItem('minidev_generation_lock');
+                console.log('✅ Lock written to sessionStorage:', written ? 'YES' : 'NO', written);
             } else {
+                console.log('🔓 REMOVING generation lock');
                 sessionStorage.removeItem('minidev_generation_lock');
             }
-        } catch {
-            // Ignore storage errors
+        } catch (error) {
+            console.error('❌ FAILED to set generation lock:', error);
         }
     };
 
@@ -193,6 +200,18 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
         console.log('🔄 onGeneratingChange called with isGenerating:', isGenerating);
         onGeneratingChange(isGenerating);
     }, [isGenerating, onGeneratingChange]);
+
+    // Monitor generation lock for debugging
+    useEffect(() => {
+        const interval = setInterval(() => {
+            const lock = getGlobalGenerationLock();
+            if (lock) {
+                console.log('🔍 Lock status check - ACTIVE:', lock);
+            }
+        }, 10000); // Check every 10 seconds
+
+        return () => clearInterval(interval);
+    }, []);
 
     const handleSendMessage = async (userMessage: string) => {
         if (!chatSessionId || !sessionToken) return;
