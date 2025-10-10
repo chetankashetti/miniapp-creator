@@ -311,7 +311,7 @@ export function CodeEditor({ currentProject, onFileChange }: CodeEditorProps) {
     const [fileContent, setFileContent] = useState<string>('');
     const [fileTree, setFileTree] = useState<FileNode[]>([]);
     const [isLoadingContent, setIsLoadingContent] = useState<boolean>(false);
-    const [monacoError, setMonacoError] = useState<boolean>(process.env.NODE_ENV === 'production');
+    const [monacoError, setMonacoError] = useState<boolean>(false);
     const [monacoLoadTimeout, setMonacoLoadTimeout] = useState<NodeJS.Timeout | null>(null);
     const [monacoRetryCount, setMonacoRetryCount] = useState<number>(0);
     const { sessionToken } = useAuthContext();
@@ -386,15 +386,15 @@ export function CodeEditor({ currentProject, onFileChange }: CodeEditorProps) {
         }
     }, [selectedFile, fileContent, monacoError]);
 
-    // Force fallback in production if Monaco fails to load after 1 second
+    // Monaco load timeout increased to give it more time to load
     useEffect(() => {
-        if (selectedFile && fileContent && !monacoError && process.env.NODE_ENV === 'production') {
-            console.log('🚀 Production mode - setting aggressive Monaco fallback');
+        if (selectedFile && fileContent && !monacoError) {
+            console.log('⏰ Monaco load monitor started for:', selectedFile);
             const timeout = setTimeout(() => {
-                console.log('🚀 Production fallback triggered - Monaco taking too long');
-                setMonacoError(true);
-            }, 1000); // 1 second timeout in production
-            
+                console.log('⏰ Monaco taking longer than expected, but staying patient...');
+                // Increased timeout - Monaco can take time in production
+            }, 5000); // 5 second monitoring
+
             return () => clearTimeout(timeout);
         }
     }, [selectedFile, fileContent, monacoError]);
@@ -585,7 +585,7 @@ export function CodeEditor({ currentProject, onFileChange }: CodeEditorProps) {
                                         Loading file content...
                                     </div>
                                 ) : fileContent && fileContent !== '// File not found or error loading content' && !fileContent.includes('timeout') && !fileContent.includes('Error loading') ? (
-                                    !monacoError && process.env.NODE_ENV !== 'production' ? (
+                                    !monacoError ? (
                                         <MonacoEditor
                                             height="100%"
                                             language={getLanguage(selectedFile)}
@@ -631,9 +631,9 @@ export function CodeEditor({ currentProject, onFileChange }: CodeEditorProps) {
                                         />
                                     ) : (
                                         <div className="flex-1 flex flex-col">
-                                            <div className="text-xs text-gray-500 p-2 border-b bg-yellow-50 flex items-center justify-between">
-                                                <span>{process.env.NODE_ENV === 'production' ? '📝 Using text editor (Monaco disabled in production)' : '⚠️ Monaco Editor unavailable - using fallback editor'}</span>
-                                                {monacoRetryCount < 2 && (
+                                            <div className="text-xs text-gray-500 p-2 border-b bg-blue-50 flex items-center justify-between">
+                                                <span>📝 Text editor (Monaco loading failed)</span>
+                                                {monacoRetryCount < 3 && (
                                                     <button
                                                         onClick={() => {
                                                             console.log('🔄 Retrying Monaco Editor...');
@@ -642,7 +642,7 @@ export function CodeEditor({ currentProject, onFileChange }: CodeEditorProps) {
                                                         }}
                                                         className="text-xs bg-blue-500 text-white px-2 py-1 rounded hover:bg-blue-600"
                                                     >
-                                                        Retry Monaco
+                                                        Retry Monaco Editor
                                                     </button>
                                                 )}
                                             </div>
