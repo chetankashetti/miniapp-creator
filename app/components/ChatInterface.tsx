@@ -44,33 +44,58 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
     const { sessionToken } = useAuthContext();
 
 
-    // Chat session state
-    const [chatSessionId, setChatSessionId] = useState<string>('');
+    // Chat session state - persist chatSessionId in sessionStorage to survive re-mounts
+    const [chatSessionId, setChatSessionId] = useState<string>(() => {
+        try {
+            const stored = sessionStorage.getItem('minidev_chat_session_id');
+            if (stored) return stored;
+            const newId = crypto.randomUUID();
+            sessionStorage.setItem('minidev_chat_session_id', newId);
+            return newId;
+        } catch {
+            return crypto.randomUUID();
+        }
+    });
     const [chatProjectId, setChatProjectId] = useState<string>(''); // Track the actual project ID where chat messages are stored
     const [currentPhase, setCurrentPhase] = useState<'requirements' | 'building' | 'editing'>('requirements');
-    
-    // Persistent generation flag using sessionStorage to prevent duplicates across re-mounts
-    const getGenerationFlag = () => {
+
+    // GLOBAL generation lock - doesn't depend on chatSessionId to prevent duplicates across re-mounts
+    const getGlobalGenerationLock = () => {
         try {
-            return sessionStorage.getItem(`generation_triggered_${chatSessionId}`) === 'true';
-        } catch {
-            return false;
-        }
-    };
-    
-    const setGenerationFlag = (value: boolean) => {
-        try {
-            if (value) {
-                sessionStorage.setItem(`generation_triggered_${chatSessionId}`, 'true');
+            const lock = sessionStorage.getItem('minidev_generation_lock');
+            if (!lock) return null;
+            const lockData = JSON.parse(lock);
+            // Check if lock is recent (within 15 minutes)
+            if (Date.now() - lockData.timestamp < 15 * 60 * 1000) {
+                return lockData;
             } else {
-                sessionStorage.removeItem(`generation_triggered_${chatSessionId}`);
+                // Lock expired, remove it
+                sessionStorage.removeItem('minidev_generation_lock');
+                return null;
             }
         } catch {
-            // Ignore localStorage errors
+            return null;
         }
     };
-    
-    const [hasTriggeredGeneration, setHasTriggeredGeneration] = useState(() => getGenerationFlag());
+
+    const setGlobalGenerationLock = (value: boolean) => {
+        try {
+            if (value) {
+                sessionStorage.setItem('minidev_generation_lock', JSON.stringify({
+                    timestamp: Date.now(),
+                    sessionId: chatSessionId
+                }));
+            } else {
+                sessionStorage.removeItem('minidev_generation_lock');
+            }
+        } catch {
+            // Ignore storage errors
+        }
+    };
+
+    const [hasTriggeredGeneration, setHasTriggeredGeneration] = useState(() => {
+        return getGlobalGenerationLock() !== null;
+    });
 
     // Function to scroll to bottom of chat
     const scrollToBottom = () => {
@@ -78,20 +103,6 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
             chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
         }
     };
-
-    // Initialize chat session
-    useEffect(() => {
-        if (!chatSessionId) {
-            const newSessionId = crypto.randomUUID();
-            setChatSessionId(newSessionId);
-            // Clean up any old generation flags for this new session
-            try {
-                sessionStorage.removeItem(`generation_triggered_${newSessionId}`);
-            } catch {
-                // Ignore errors
-            }
-        }
-    }, [chatSessionId]);
 
     // Load chat messages when project changes
     useEffect(() => {
@@ -368,9 +379,10 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
             }
         } catch (err) {
             console.error('Error:', err);
-            // Reset generation flag on error to allow retry
+            // Reset generation locks on error to allow retry
+            console.log('🔓 Resetting generation locks due to chat error');
             setHasTriggeredGeneration(false);
-            setGenerationFlag(false);
+            setGlobalGenerationLock(false);
             // setError(err instanceof Error ? err.message : 'An error occurred');
             setChat(prev => [
                 ...prev,
@@ -388,28 +400,42 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
     };
 
     const handleGenerateProject = async (generationPrompt: string) => {
+        // Check global lock first - most reliable check
+        const existingLock = getGlobalGenerationLock();
+
         console.log('🔍 handleGenerateProject called:', {
             hasPrompt: !!generationPrompt.trim(),
             hasSessionToken: !!sessionToken,
             isGenerating,
             hasTriggeredGeneration,
-            currentPhase
+            existingLock: !!existingLock,
+            currentPhase,
+            timestamp: new Date().toISOString()
         });
-        
-        if (!generationPrompt.trim() || !sessionToken || isGenerating || hasTriggeredGeneration) {
-            // setError('Please enter a prompt');
-            console.log('⚠️ Skipping project generation: invalid prompt, no session token, already generating, or generation already triggered');
+
+        // Multiple layers of protection against duplicates
+        if (!generationPrompt.trim() || !sessionToken || isGenerating || hasTriggeredGeneration || existingLock) {
+            console.log('⚠️ Skipping project generation:', {
+                reason: !generationPrompt.trim() ? 'no prompt' :
+                        !sessionToken ? 'no session token' :
+                        isGenerating ? 'already generating' :
+                        hasTriggeredGeneration ? 'already triggered' :
+                        existingLock ? 'global lock exists' : 'unknown',
+                existingLockData: existingLock
+            });
             return;
         }
+
         console.log('🚀 Starting project generation...');
         setIsGenerating(true);
         // setError(null);
         try {
-            console.log('🚀 Starting generation with prompt:', generationPrompt.substring(0, 200) + '...');
+            console.log('🚀 Setting generation locks with prompt:', generationPrompt.substring(0, 200) + '...');
 
             // Mark generation as triggered immediately to prevent duplicates
+            // Use BOTH React state and global sessionStorage lock for maximum protection
             setHasTriggeredGeneration(true);
-            setGenerationFlag(true);
+            setGlobalGenerationLock(true);
 
             // No timeout - let it run as long as needed
             // Client-side flags prevent duplicates (isGenerating, hasTriggeredGeneration)
@@ -462,10 +488,10 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
             onProjectGenerated(project);
             setCurrentPhase('editing');
             
-            // Keep generation flag set to prevent duplicate generations
+            // Keep generation lock set to prevent duplicate generations
             // Once a project is generated, we should not allow further generation
             // setHasTriggeredGeneration(false);
-            // setGenerationFlag(false);
+            // setGlobalGenerationLock(false);
 
             // Add generation success message to chat
             const aiMessage = project.generatedFiles && project.generatedFiles.length > 0
@@ -514,12 +540,13 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
                 }
             ]);
 
-            // Reset flags to allow retry
+            // Reset all locks to allow retry
+            console.log('🔓 Resetting generation locks due to error');
             setHasTriggeredGeneration(false);
-            setGenerationFlag(false);
+            setGlobalGenerationLock(false);
         } finally {
             setIsGenerating(false);
-            // Don't reset generation flags here - handle in catch block based on error type
+            // Don't reset generation locks here - handle in catch block based on error type
         }
     };
 
