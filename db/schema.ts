@@ -79,10 +79,27 @@ export const chatMessages = pgTable('chat_messages', {
   changedFiles: jsonb('changed_files'), // Array of changed file names
 });
 
+// Generation jobs table (for async processing)
+export const generationJobs = pgTable('generation_jobs', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  userId: uuid('user_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
+  projectId: uuid('project_id').references(() => projects.id, { onDelete: 'cascade' }),
+  status: text('status').default('pending').notNull(), // 'pending', 'processing', 'completed', 'failed'
+  prompt: text('prompt').notNull(),
+  context: jsonb('context').notNull(), // Chat history, project info, etc.
+  result: jsonb('result'), // Generation result when completed
+  error: text('error'), // Error message if failed
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  startedAt: timestamp('started_at'),
+  completedAt: timestamp('completed_at'),
+  expiresAt: timestamp('expires_at').notNull(), // 24 hours from creation
+});
+
 // Define relations
 export const usersRelations = relations(users, ({ many }) => ({
   projects: many(projects),
   sessions: many(userSessions),
+  generationJobs: many(generationJobs),
 }));
 
 export const projectsRelations = relations(projects, ({ one, many }) => ({
@@ -127,6 +144,17 @@ export const userSessionsRelations = relations(userSessions, ({ one }) => ({
 export const chatMessagesRelations = relations(chatMessages, ({ one }) => ({
   project: one(projects, {
     fields: [chatMessages.projectId],
+    references: [projects.id],
+  }),
+}));
+
+export const generationJobsRelations = relations(generationJobs, ({ one }) => ({
+  user: one(users, {
+    fields: [generationJobs.userId],
+    references: [users.id],
+  }),
+  project: one(projects, {
+    fields: [generationJobs.projectId],
     references: [projects.id],
   }),
 }));

@@ -1,5 +1,5 @@
-import { db, users, projects, projectFiles, projectPatches, projectDeployments, userSessions, chatMessages } from '../db';
-import { eq, and, desc } from 'drizzle-orm';
+import { db, users, projects, projectFiles, projectPatches, projectDeployments, userSessions, chatMessages, generationJobs } from '../db';
+import { eq, and, desc, sql } from 'drizzle-orm';
 
 // User management functions
 export async function createUser(privyUserId: string, email?: string, displayName?: string, pfpUrl?: string) {
@@ -309,4 +309,80 @@ export async function migrateChatMessages(fromProjectId: string, toProjectId: st
 
 export async function clearProjectChatMessages(projectId: string) {
   await db.delete(chatMessages).where(eq(chatMessages.projectId, projectId));
+}
+
+// Generation job management functions
+export async function createGenerationJob(
+  userId: string,
+  prompt: string,
+  context: Record<string, unknown>,
+  projectId?: string
+) {
+  const expiresAt = new Date();
+  expiresAt.setHours(expiresAt.getHours() + 24); // 24 hours from now
+
+  const [job] = await db.insert(generationJobs).values({
+    userId,
+    projectId: projectId || null,
+    prompt,
+    context,
+    expiresAt,
+  }).returning();
+  return job;
+}
+
+export async function getGenerationJobById(jobId: string) {
+  const [job] = await db.select().from(generationJobs).where(eq(generationJobs.id, jobId));
+  return job;
+}
+
+export async function updateGenerationJobStatus(
+  jobId: string,
+  status: 'pending' | 'processing' | 'completed' | 'failed',
+  result?: Record<string, unknown>,
+  error?: string
+) {
+  const updates: Record<string, unknown> = { status };
+
+  if (status === 'processing' && !result) {
+    updates.startedAt = new Date();
+  }
+
+  if (status === 'completed' || status === 'failed') {
+    updates.completedAt = new Date();
+  }
+
+  if (result !== undefined) {
+    updates.result = result;
+  }
+
+  if (error !== undefined) {
+    updates.error = error;
+  }
+
+  const [job] = await db.update(generationJobs)
+    .set(updates)
+    .where(eq(generationJobs.id, jobId))
+    .returning();
+  return job;
+}
+
+export async function getPendingGenerationJobs(limit: number = 10) {
+  return await db.select().from(generationJobs)
+    .where(eq(generationJobs.status, 'pending'))
+    .orderBy(generationJobs.createdAt)
+    .limit(limit);
+}
+
+export async function deleteExpiredGenerationJobs() {
+  const now = new Date();
+  await db.delete(generationJobs)
+    .where(sql`${generationJobs.expiresAt} < ${now}`);
+}
+
+export async function getUserGenerationJobs(userId: string, limit: number = 20) {
+  return await db.select().from(generationJobs)
+    .where(eq(generationJobs.userId, userId))
+    .orderBy(desc(generationJobs.createdAt))
+    .limit(limit);
 }

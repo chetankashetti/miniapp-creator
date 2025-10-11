@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import fs from "fs-extra";
 import path from "path";
 import { v4 as uuidv4 } from "uuid";
-import { createProject, saveProjectFiles, savePatch, getUserById, createUser, getProjectById } from "../../../lib/database";
+import { createProject, saveProjectFiles, savePatch, getUserById, getUserByPrivyId, createUser, getProjectById } from "../../../lib/database";
 import { authenticateRequest } from "../../../lib/auth";
 import { logger, logApiRequest, logErrorWithContext } from "../../../lib/logger";
 import {
@@ -477,6 +477,125 @@ export async function POST(request: NextRequest) {
         totalFiles: 1,
         testMode: true,
         requestId
+      });
+    }
+
+    // ASYNC MODE: Return immediately with job ID (recommended for production)
+    const useAsyncProcessing = request.headers.get("X-Use-Async-Processing") === "true" ||
+                                process.env.USE_ASYNC_PROCESSING === "true";
+
+    if (useAsyncProcessing) {
+      console.log(`🔄 ASYNC MODE: Creating job and returning immediately`);
+
+      // Import async dependencies
+      const { createGenerationJob } = await import("../../../lib/database");
+
+      // Authenticate the request
+      const bypassAuth = request.headers.get("X-Bypass-Auth") === "true";
+      const testUserId = request.headers.get("X-Test-User-Id");
+
+      let user;
+      let isAuthorized;
+
+      if (bypassAuth && testUserId) {
+        logger.warn("AUTH BYPASS ENABLED FOR TESTING", { requestId, testUserId });
+
+        // For testing: Ensure test user exists in database before creating job
+        // (generation_jobs table has foreign key constraint on user_id)
+        try {
+          let dbUser = await getUserByPrivyId(testUserId);
+          if (!dbUser) {
+            logger.info("Creating test user in database", { requestId, testUserId });
+            dbUser = await createUser(
+              testUserId, // Use UUID as privyUserId
+              "test@example.com",
+              "Test User",
+              undefined
+            );
+            logger.info("Test user created", { requestId, userId: dbUser.id });
+          }
+
+          user = {
+            id: dbUser.id,
+            privyUserId: dbUser.privyUserId,
+            email: dbUser.email ?? "test@example.com",
+            displayName: dbUser.displayName ?? "Test User",
+          };
+        } catch (dbError) {
+          logger.error("Failed to create/get test user", { requestId, error: dbError });
+          throw new Error(`Failed to create test user: ${dbError instanceof Error ? dbError.message : String(dbError)}`);
+        }
+
+        isAuthorized = true;
+      } else {
+        const authResult = await authenticateRequest(request);
+        user = authResult.user;
+        isAuthorized = authResult.isAuthorized;
+
+        if (!isAuthorized || !user) {
+          return NextResponse.json(
+            { error: authResult.error || "Authentication required" },
+            { status: 401 }
+          );
+        }
+      }
+
+      const { prompt, useMultiStage = true, projectId: existingProjectId } = await request.json();
+
+      if (!prompt) {
+        return NextResponse.json({ error: "Missing prompt" }, { status: 400 });
+      }
+
+      console.log(`📝 Creating generation job for user: ${user.email || user.id}`);
+      console.log(`📋 Prompt: ${prompt.substring(0, 100)}...`);
+
+      // Create job in database
+      const job = await createGenerationJob(
+        user.id,
+        prompt,
+        {
+          prompt,
+          existingProjectId,
+          useMultiStage,
+        },
+        existingProjectId
+      );
+
+      console.log(`✅ Job created with ID: ${job.id}`);
+
+      // Trigger background processing asynchronously
+      // Note: This uses fetch to call the worker endpoint without waiting
+      const workerToken = process.env.WORKER_AUTH_TOKEN || 'dev-worker-token';
+      const workerUrl = process.env.WORKER_URL || `${request.nextUrl.origin}/api/jobs/process`;
+
+      console.log(`🔧 Triggering background worker at: ${workerUrl}`);
+
+      // Fire and forget - don't await this
+      fetch(workerUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${workerToken}`,
+        },
+        body: JSON.stringify({ jobId: job.id }),
+      }).catch(error => {
+        console.error('⚠️ Failed to trigger background worker:', error);
+        // Job will be picked up by scheduled worker polling
+      });
+
+      // Return immediately with 202 Accepted and job ID
+      return NextResponse.json({
+        accepted: true,
+        jobId: job.id,
+        status: 'pending',
+        message: 'Generation job created and processing started',
+        pollUrl: `/api/jobs/${job.id}`,
+        estimatedTime: '5-10 minutes',
+      }, {
+        status: 202, // 202 Accepted
+        headers: {
+          'Location': `/api/jobs/${job.id}`,
+        },
       });
     }
     

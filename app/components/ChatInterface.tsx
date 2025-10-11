@@ -453,6 +453,67 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
         }
     };
 
+    // Polling function for async job status
+    const pollJobStatus = async (jobId: string): Promise<GeneratedProject> => {
+        const maxAttempts = 200; // Poll for up to ~16 minutes (200 * 5 seconds)
+        let attempt = 0;
+
+        console.log(`🔄 Starting to poll job ${jobId}...`);
+
+        return new Promise((resolve, reject) => {
+            const pollInterval = setInterval(async () => {
+                attempt++;
+
+                try {
+                    console.log(`🔄 Polling job ${jobId} (attempt ${attempt}/${maxAttempts})...`);
+
+                    const response = await fetch(`/api/jobs/${jobId}`, {
+                        headers: {
+                            'Authorization': `Bearer ${sessionToken}`,
+                        },
+                    });
+
+                    if (!response.ok) {
+                        clearInterval(pollInterval);
+                        reject(new Error(`Failed to fetch job status: ${response.status}`));
+                        return;
+                    }
+
+                    const job = await response.json();
+                    console.log(`📊 Job status:`, job.status);
+
+                    if (job.status === 'completed') {
+                        clearInterval(pollInterval);
+                        console.log('✅ Job completed successfully!', job.result);
+
+                        // Transform job result to GeneratedProject format
+                        const project: GeneratedProject = {
+                            projectId: job.result.projectId,
+                            port: job.result.port,
+                            url: job.result.url,
+                            generatedFiles: job.result.generatedFiles,
+                            previewUrl: job.result.previewUrl,
+                            vercelUrl: job.result.vercelUrl,
+                        };
+
+                        resolve(project);
+                    } else if (job.status === 'failed') {
+                        clearInterval(pollInterval);
+                        reject(new Error(job.error || 'Job failed'));
+                    } else if (attempt >= maxAttempts) {
+                        clearInterval(pollInterval);
+                        reject(new Error('Job polling timeout - generation is taking too long'));
+                    }
+                    // Otherwise, job is still pending or processing, continue polling
+                } catch (error) {
+                    console.error('❌ Error polling job:', error);
+                    clearInterval(pollInterval);
+                    reject(error);
+                }
+            }, 5000); // Poll every 5 seconds
+        });
+    };
+
     const handleGenerateProject = async (generationPrompt: string) => {
         // Check global lock first - most reliable check
         const existingLock = getGlobalGenerationLock();
@@ -492,8 +553,9 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
             setHasTriggeredGeneration(true);
             setGlobalGenerationLock(true);
 
-            // No timeout - let it run as long as needed
-            // Client-side flags prevent duplicates (isGenerating, hasTriggeredGeneration)
+            // Check if async processing is enabled
+            const useAsyncProcessing = window.localStorage.getItem('minidev_use_async_processing') === 'true' ||
+                                       process.env.NEXT_PUBLIC_USE_ASYNC_PROCESSING === 'true';
 
             // TEST MODE: Add this header to enable quick 30-second return for debugging
             const testQuickReturn = window.localStorage.getItem('minidev_test_quick_return') === 'true';
@@ -506,7 +568,8 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
                 headers: {
                     'Content-Type': 'application/json',
                     'Authorization': `Bearer ${sessionToken}`,
-                    ...(testQuickReturn && { 'X-Test-Quick-Return': 'true' })
+                    ...(testQuickReturn && { 'X-Test-Quick-Return': 'true' }),
+                    ...(useAsyncProcessing && { 'X-Use-Async-Processing': 'true' })
                 },
                 body: JSON.stringify({
                     prompt: generationPrompt,
@@ -516,9 +579,78 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
 
             console.log('📤 Sent /api/generate request with:', {
                 hasChatProjectId: !!chatProjectId,
-                chatProjectId
+                chatProjectId,
+                useAsyncProcessing
             });
 
+            // Handle async processing response (202 Accepted)
+            if (response.status === 202 && useAsyncProcessing) {
+                const jobData = await response.json();
+                console.log('🔄 Async job created:', jobData.jobId);
+
+                // Add a message about async processing
+                setChat(prev => [
+                    ...prev,
+                    {
+                        role: 'ai',
+                        content: `⏳ Your miniapp generation has started! This will take about ${jobData.estimatedTime || '5-10 minutes'}. I'll let you know when it's ready.`,
+                        phase: 'building',
+                        timestamp: Date.now()
+                    }
+                ]);
+
+                // Start polling for job completion
+                const project = await pollJobStatus(jobData.jobId);
+
+                // Project is now ready, continue with normal flow
+                console.log('📦 Project generated successfully via async processing:', {
+                    projectId: project.projectId,
+                });
+
+                // Rest of the success handling is below in the common code path
+                console.log('✅ Generation complete, updating UI state...');
+                onProjectGenerated(project);
+                console.log('✅ Project state updated via onProjectGenerated');
+                setCurrentPhase('editing');
+                console.log('✅ Phase set to editing');
+
+                // Add generation success message to chat
+                const aiMessage = project.generatedFiles && project.generatedFiles.length > 0
+                    ? `🎉 Your miniapp has been created! I've generated ${project.generatedFiles.length} files and your app is now running. You can preview it on the right and continue chatting with me to make changes.`
+                    : '🎉 Your miniapp has been created! The preview should be available shortly. You can continue chatting with me to make changes.';
+
+                const successMsg: ChatMessage = {
+                    role: 'ai',
+                    content: aiMessage,
+                    changedFiles: project.generatedFiles || [],
+                    phase: 'editing',
+                    timestamp: Date.now()
+                };
+
+                setChat(prev => [...prev, successMsg]);
+
+                // Save success message to database
+                if (project.projectId) {
+                    try {
+                        await fetch(`/api/projects/${project.projectId}/chat`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${sessionToken}` },
+                            body: JSON.stringify({
+                                role: 'ai',
+                                content: aiMessage,
+                                phase: 'editing',
+                                changedFiles: project.generatedFiles || []
+                            })
+                        });
+                    } catch (error) {
+                        console.warn('Failed to save success message to database:', error);
+                    }
+                }
+
+                return; // Exit early for async flow
+            }
+
+            // Handle synchronous response (200 OK)
             if (!response.ok) {
                 const errorData = await response.json();
                 const errorMessage = errorData.details || errorData.error || 'Failed to generate project';

@@ -16,7 +16,9 @@
     "test:auth-flow": "node scripts/test-auth-flow.js",
     "test:generation": "BYPASS_AUTH=true node scripts/test-generation-flow.js",
     "test:e2e": "bash scripts/run-e2e-test.sh",
-    "test:quick": "node scripts/quick-test.js"
+    "test:quick": "node scripts/quick-test.js",
+    "test:async": "node scripts/test-async-processing.js",
+    "migrate": "bash scripts/run-db-migration.sh"
   },
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",
