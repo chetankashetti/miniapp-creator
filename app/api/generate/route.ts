@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import fs from "fs-extra";
 import path from "path";
 import { v4 as uuidv4 } from "uuid";
-import { createProject, saveProjectFiles, savePatch, getUserById, getUserByPrivyId, createUser, getProjectById } from "../../../lib/database";
+import { createProject, saveProjectFiles, savePatch, getUserById, getUserByPrivyId, createUser, getProjectById, getProjectFiles } from "../../../lib/database";
 import { authenticateRequest } from "../../../lib/auth";
 import { logger, logApiRequest, logErrorWithContext } from "../../../lib/logger";
 import {
@@ -1089,16 +1089,61 @@ export async function PATCH(request: NextRequest) {
     }
 
     // Use local generated folder for development, /tmp/generated for production
-    const outputDir = process.env.NODE_ENV === 'production' 
-      ? '/tmp/generated' 
+    const outputDir = process.env.NODE_ENV === 'production'
+      ? '/tmp/generated'
       : path.join(process.cwd(), 'generated');
     const userDir = path.join(outputDir, projectId);
-    
+
     // Ensure output directory exists
     fs.mkdirSync(outputDir, { recursive: true });
 
-    // Read all files in the project (excluding node_modules, .next, etc.)
-    const currentFiles = await readAllFiles(userDir);
+    // Try to read files from disk first, fall back to database if directory doesn't exist
+    let currentFiles: { filename: string; content: string }[] = [];
+
+    try {
+      // Check if the directory exists
+      if (await fs.pathExists(userDir)) {
+        console.log(`📁 Reading files from disk: ${userDir}`);
+        currentFiles = await readAllFiles(userDir);
+      } else {
+        console.log(`💾 Directory not found on disk, fetching from database for project: ${projectId}`);
+        // Fetch files from database
+        const dbFiles = await getProjectFiles(projectId);
+        currentFiles = dbFiles.map(f => ({
+          filename: f.filename,
+          content: f.content
+        }));
+
+        if (currentFiles.length > 0) {
+          console.log(`✅ Loaded ${currentFiles.length} files from database`);
+          // Recreate the directory structure on disk for processing
+          console.log(`📁 Recreating project directory: ${userDir}`);
+          await writeFilesToDir(userDir, currentFiles);
+          console.log(`✅ Project files restored to disk`);
+        }
+      }
+    } catch (error) {
+      console.error(`❌ Error reading project files:`, error);
+      // Try database as final fallback
+      try {
+        console.log(`💾 Attempting database fallback for project: ${projectId}`);
+        const dbFiles = await getProjectFiles(projectId);
+        currentFiles = dbFiles.map(f => ({
+          filename: f.filename,
+          content: f.content
+        }));
+
+        if (currentFiles.length > 0) {
+          console.log(`✅ Loaded ${currentFiles.length} files from database (fallback)`);
+          // Recreate the directory structure on disk for processing
+          await writeFilesToDir(userDir, currentFiles);
+          console.log(`✅ Project files restored to disk (fallback)`);
+        }
+      } catch (dbError) {
+        console.error(`❌ Database fallback also failed:`, dbError);
+        throw error; // Re-throw the original error
+      }
+    }
 
     if (currentFiles.length === 0) {
       return NextResponse.json(
