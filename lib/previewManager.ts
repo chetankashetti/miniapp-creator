@@ -1,5 +1,10 @@
 import fs from "fs-extra";
 import path from "path";
+import {
+  parseContractAddressesFromDeployment,
+  updateFilesWithContractAddresses,
+  type ContractAddressMap
+} from "./contractAddressInjector";
 
 // Store active previews for management
 const activePreviews = new Map<string, PreviewResponse>();
@@ -16,6 +21,7 @@ export interface PreviewResponse {
   aliasSuccess?: boolean;
   isNewDeployment?: boolean;
   hasPackageChanges?: boolean;
+  contractAddresses?: { [contractName: string]: string }; // Deployed contract addresses
 }
 
 export interface PreviewFile {
@@ -144,6 +150,28 @@ export async function createPreview(
 
       console.log("📦 API Response:", JSON.stringify(apiResponse, null, 2));
 
+      // Parse contract addresses from deployment response
+      const contractAddresses = parseContractAddressesFromDeployment(apiResponse);
+
+      // If contract addresses were deployed, inject them into the files and re-save
+      if (contractAddresses && Object.keys(contractAddresses).length > 0) {
+        console.log(`\n${"=".repeat(60)}`);
+        console.log(`📝 CONTRACT ADDRESSES DETECTED - INJECTING INTO PROJECT`);
+        console.log(`${"=".repeat(60)}`);
+        console.log(`Deployed contracts:`, contractAddresses);
+
+        // Update files with contract addresses
+        const updatedFiles = updateFilesWithContractAddresses(files, contractAddresses);
+
+        // Save updated files to generated directory
+        try {
+          await saveFilesToGenerated(projectId, updatedFiles);
+          console.log(`✅ Updated files saved with contract addresses`);
+        } catch (saveError) {
+          console.error(`⚠️  Failed to save updated files:`, saveError);
+        }
+      }
+
       // Map the API response to our PreviewResponse format
       const previewData: PreviewResponse = {
         url:
@@ -157,6 +185,7 @@ export async function createPreview(
         aliasSuccess: apiResponse.aliasSuccess as boolean,
         isNewDeployment: apiResponse.isNewDeployment as boolean,
         hasPackageChanges: apiResponse.hasPackageChanges as boolean,
+        contractAddresses: contractAddresses || undefined,
       };
 
       // Store the preview info

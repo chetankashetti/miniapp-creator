@@ -55,6 +55,7 @@ export const projectDeployments = pgTable('project_deployments', {
   deploymentUrl: text('deployment_url').notNull(),
   status: text('status').notNull(), // 'pending', 'success', 'failed'
   buildLogs: text('build_logs'),
+  contractAddresses: jsonb('contract_addresses'), // { ContractName: '0x...', ... }
   deployedAt: timestamp('deployed_at'),
   createdAt: timestamp('created_at').defaultNow().notNull(),
 });
