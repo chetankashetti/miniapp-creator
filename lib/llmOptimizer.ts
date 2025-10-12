@@ -2542,6 +2542,18 @@ async function fixRailwayCompilationErrors(
     }
   }
 
+  // Validate ABI preservation before returning
+  console.log("\n🔍 Step 9: Validating ABI preservation...");
+  const validationResult = validateABIPreservation(railwayResult.files, finalFiles);
+
+  if (!validationResult.isValid) {
+    console.warn("\n⚠️ ABI VALIDATION WARNINGS:");
+    validationResult.warnings.forEach(warning => console.warn(`  ${warning}`));
+    console.warn("  → Original ABIs have been restored automatically");
+  } else {
+    console.log("  ✅ No ABI modifications detected");
+  }
+
   console.log("\n" + "=".repeat(60));
   console.log("🎉 STAGE 4: Railway Compilation Error Fixing Complete!");
   console.log("=".repeat(60));
@@ -2550,8 +2562,9 @@ async function fixRailwayCompilationErrors(
   console.log(`  - Files fixed: ${fixedFiles.length}`);
   console.log(`  - Files unchanged: ${unchangedFiles.length}`);
   console.log(`  - Original errors: ${railwayResult.errors.length}`);
+  console.log(`  - ABI validation: ${validationResult.isValid ? '✅ Passed' : '⚠️ Issues auto-fixed'}`);
   console.log("=".repeat(60));
-  
+
   return finalFiles;
 }
 
@@ -2746,6 +2759,18 @@ async function fixCompilationErrors(
     }
   }
 
+  // Validate ABI preservation before returning
+  console.log("\n🔍 Step 9: Validating ABI preservation...");
+  const validationResult = validateABIPreservation(compilationResult.files, finalFiles);
+
+  if (!validationResult.isValid) {
+    console.warn("\n⚠️ ABI VALIDATION WARNINGS:");
+    validationResult.warnings.forEach(warning => console.warn(`  ${warning}`));
+    console.warn("  → Original ABIs have been restored automatically");
+  } else {
+    console.log("  ✅ No ABI modifications detected");
+  }
+
   console.log("\n" + "=".repeat(60));
   console.log("🎉 STAGE 4: Compilation Error Fixing Complete!");
   console.log("=".repeat(60));
@@ -2754,9 +2779,114 @@ async function fixCompilationErrors(
   console.log(`  - Files fixed: ${fixedFiles.length}`);
   console.log(`  - Files unchanged: ${unchangedFiles.length}`);
   console.log(`  - Original errors: ${compilationResult.errors.length}`);
+  console.log(`  - ABI validation: ${validationResult.isValid ? '✅ Passed' : '⚠️ Issues auto-fixed'}`);
   console.log("=".repeat(60));
-  
+
   return finalFiles;
+}
+
+/**
+ * Validate that ABI/contractConfig files haven't been improperly modified
+ */
+function validateABIPreservation(
+  originalFiles: { filename: string; content: string }[],
+  fixedFiles: { filename: string; content: string }[]
+): { isValid: boolean; warnings: string[] } {
+  const warnings: string[] = [];
+  const contractConfigPattern = /contractConfig\.ts$/;
+
+  for (const fixedFile of fixedFiles) {
+    // Check if this is a contractConfig file
+    if (contractConfigPattern.test(fixedFile.filename)) {
+      const originalFile = originalFiles.find(f => f.filename === fixedFile.filename);
+
+      if (!originalFile) {
+        continue; // New file, skip validation
+      }
+
+      // Extract ABI from both files
+      const originalABI = extractABIFromContent(originalFile.content);
+      const fixedABI = extractABIFromContent(fixedFile.content);
+
+      if (!originalABI || !fixedABI) {
+        continue; // Can't validate if we can't extract ABIs
+      }
+
+      // Count functions in both ABIs
+      const originalFunctions = originalABI.match(/"name":\s*"[^"]+"/g) || [];
+      const fixedFunctions = fixedABI.match(/"name":\s*"[^"]+"/g) || [];
+
+      // Check if functions were removed
+      if (fixedFunctions.length < originalFunctions.length) {
+        const removed = originalFunctions.length - fixedFunctions.length;
+        warnings.push(
+          `⚠️ ${fixedFile.filename}: ABI was modified! ${removed} function(s) removed (${originalFunctions.length} → ${fixedFunctions.length}). ` +
+          `Stage 4 should NEVER remove ABI functions. Restoring original ABI.`
+        );
+
+        // Restore original ABI
+        fixedFile.content = originalFile.content;
+      }
+
+      // Check if function names changed (excluding Events)
+      const originalFunctionNames = extractFunctionNamesFromABI(originalFile.content);
+      const fixedFunctionNames = extractFunctionNamesFromABI(fixedFile.content);
+
+      const renamedFunctions = originalFunctionNames.filter(name =>
+        !fixedFunctionNames.includes(name)
+      );
+
+      if (renamedFunctions.length > 0) {
+        warnings.push(
+          `⚠️ ${fixedFile.filename}: Function names changed in ABI! Missing: ${renamedFunctions.join(', ')}. ` +
+          `Stage 4 should NEVER rename ABI functions. Restoring original ABI.`
+        );
+
+        // Restore original ABI
+        fixedFile.content = originalFile.content;
+      }
+    }
+  }
+
+  return {
+    isValid: warnings.length === 0,
+    warnings
+  };
+}
+
+/**
+ * Extract ABI array content from contractConfig file
+ */
+function extractABIFromContent(content: string): string | null {
+  const abiMatch = content.match(/export\s+const\s+\w+_ABI\s*=\s*\[([\s\S]*?)\]\s+as\s+const;/);
+  return abiMatch ? abiMatch[1] : null;
+}
+
+/**
+ * Extract function names from ABI (excluding events, errors, constructor)
+ */
+function extractFunctionNamesFromABI(content: string): string[] {
+  const functionNames: string[] = [];
+  const abiContent = extractABIFromContent(content);
+
+  if (!abiContent) {
+    return functionNames;
+  }
+
+  // Match all ABI entries
+  const entries = abiContent.split(/\},\s*\{/);
+
+  for (const entry of entries) {
+    // Check if this is a function (not event, error, or constructor)
+    if (entry.includes('"type":\s*"function"') || entry.includes('"type": "function"')) {
+      const nameMatch = entry.match(/"name":\s*"([^"]+)"/);
+      if (nameMatch) {
+        functionNames.push(nameMatch[1]);
+      }
+    }
+  }
+
+  return functionNames;
 }
 
 /**
@@ -2788,8 +2918,19 @@ CRITICAL REQUIREMENTS:
 - Ensure Solidity contracts compile successfully
 - Follow ESLint rules and best practices
 
+🚨 ABSOLUTELY FORBIDDEN - DO NOT MODIFY:
+- NEVER modify ABI arrays in contractConfig files (src/lib/contractConfig.ts, lib/contractConfig.ts)
+- NEVER remove functions from ABIs - the ABI must remain complete
+- NEVER rename functions in ABIs to match component usage - fix the component instead
+- NEVER "simplify" or "optimize" contract interface files
+- IF errors involve ABI function names: Fix the component to use the correct function name from the ABI
+- IF errors claim a function is missing: The function IS in the ABI, the component has the wrong name
+- CONTRACT INTERFACES ARE SOURCE OF TRUTH - components must match them, not vice versa
+
 COMPILATION ERROR TYPES:
 1. TypeScript Errors: Fix type mismatches, missing imports, interface violations, function signatures
+   - For readonly array errors: Use array spreading [...array] to convert to mutable
+   - For ABI function errors: Check the ABI for the correct function name, update the component
 2. Solidity Errors: Fix contract compilation issues, syntax errors, type mismatches
 3. ESLint Errors: Fix code style and best practice violations
 4. Build Errors: Fix Next.js build failures, missing dependencies
