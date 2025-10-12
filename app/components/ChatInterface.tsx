@@ -130,7 +130,7 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
 
         loadChatMessages();
         // REMOVED currentPhase from dependencies to prevent reset loop during generation
-    }, [currentProject, sessionToken, chat.length, aiLoading]);
+    }, [currentProject, sessionToken, chat.length, aiLoading, currentPhase]);
 
     // Show warning message once when user hasn't started chatting
     useEffect(() => {

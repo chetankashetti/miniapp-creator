@@ -2,8 +2,7 @@ import fs from "fs-extra";
 import path from "path";
 import {
   parseContractAddressesFromDeployment,
-  updateFilesWithContractAddresses,
-  type ContractAddressMap
+  updateFilesWithContractAddresses
 } from "./contractAddressInjector";
 
 // Store active previews for management

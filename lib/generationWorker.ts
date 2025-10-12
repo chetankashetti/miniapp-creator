@@ -13,6 +13,7 @@ import {
   saveProjectFiles,
   getUserById,
   getProjectById,
+  createDeployment,
 } from "./database";
 import { executeEnhancedPipeline } from "./enhancedPipeline";
 import {
@@ -587,6 +588,29 @@ export async function executeGenerationJob(jobId: string): Promise<void> {
 
     await saveProjectFiles(project.id, safeFiles);
     console.log("✅ Project files saved to database successfully");
+
+    // Save deployment info to database (including contract addresses for web3 projects)
+    if (previewData && previewData.vercelUrl) {
+      try {
+        console.log("💾 Saving deployment info to database...");
+        const deployment = await createDeployment(
+          project.id, // Use actual project.id from database record
+          'vercel',
+          previewData.vercelUrl,
+          'success',
+          undefined, // buildLogs
+          previewData.contractAddresses // Contract addresses (if any)
+        );
+        console.log(`✅ Deployment saved to database: ${deployment.id}`);
+
+        if (previewData.contractAddresses && Object.keys(previewData.contractAddresses).length > 0) {
+          console.log(`📝 Contract addresses saved:`, JSON.stringify(previewData.contractAddresses, null, 2));
+        }
+      } catch (deploymentError) {
+        console.error("⚠️ Failed to save deployment info:", deploymentError);
+        // Don't fail the entire job if deployment record fails
+      }
+    }
 
     // Update job status to completed
     const result = {

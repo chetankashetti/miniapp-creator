@@ -153,7 +153,8 @@ export async function createDeployment(
   platform: string,
   deploymentUrl: string,
   status: string = 'pending',
-  buildLogs?: string
+  buildLogs?: string,
+  contractAddresses?: { [key: string]: string }
 ) {
   const [deployment] = await db.insert(projectDeployments).values({
     projectId,
@@ -161,6 +162,7 @@ export async function createDeployment(
     deploymentUrl,
     status,
     buildLogs,
+    contractAddresses: contractAddresses || null,
   }).returning();
   return deployment;
 }
