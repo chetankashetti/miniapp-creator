@@ -44,17 +44,17 @@ export async function POST(request: NextRequest) {
       // Mark as processing
       await updateGenerationJobStatus(jobId, "processing");
 
-      // Execute the job in the background
-      // Note: In production, you'd want to use a proper job queue
-      executeGenerationJob(jobId).catch((error) => {
-        console.error(`❌ Failed to process job ${jobId}:`, error);
-      });
+      // Execute the job and wait for completion
+      // This allows full logging and ensures job completes in serverless environment
+      console.log(`⏳ Waiting for job ${jobId} to complete...`);
+      await executeGenerationJob(jobId);
+      console.log(`✅ Job ${jobId} completed successfully`);
 
       return NextResponse.json({
         success: true,
         jobId,
-        status: "processing",
-        message: "Job processing started",
+        status: "completed",
+        message: "Job processing completed",
       });
     } else {
       // Process next pending job from queue
@@ -74,16 +74,17 @@ export async function POST(request: NextRequest) {
       // Mark as processing
       await updateGenerationJobStatus(job.id, "processing");
 
-      // Execute the job in the background
-      executeGenerationJob(job.id).catch((error) => {
-        console.error(`❌ Failed to process job ${job.id}:`, error);
-      });
+      // Execute the job and wait for completion
+      // This allows full logging and ensures job completes in serverless environment
+      console.log(`⏳ Waiting for job ${job.id} to complete...`);
+      await executeGenerationJob(job.id);
+      console.log(`✅ Job ${job.id} completed successfully`);
 
       return NextResponse.json({
         success: true,
         jobId: job.id,
-        status: "processing",
-        message: "Job processing started",
+        status: "completed",
+        message: "Job processing completed",
       });
     }
   } catch (error) {
