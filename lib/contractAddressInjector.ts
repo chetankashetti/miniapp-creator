@@ -195,7 +195,31 @@ export function parseContractAddressesFromDeployment(
     return response.contractAddresses as ContractAddressMap;
   }
 
-  // 2. deploymentInfo field
+  // 2. contractDeployment field (from external API)
+  if (response.contractDeployment && typeof response.contractDeployment === 'object') {
+    const contractDeployment = response.contractDeployment as Record<string, unknown>;
+    const addresses: ContractAddressMap = {};
+
+    // Extract contract addresses from contractDeployment
+    // Filter out metadata fields like deployer, network, chainId, rpcUrl, timestamp, transactionHash
+    const metadataFields = ['deployer', 'network', 'chainid', 'rpcurl', 'timestamp', 'transactionhash'];
+
+    for (const [key, value] of Object.entries(contractDeployment)) {
+      if (typeof value === 'string' &&
+          /^0x[a-fA-F0-9]{40}$/.test(value) &&
+          !metadataFields.includes(key.toLowerCase())) {
+        addresses[key] = value;
+        console.log(`  📝 Found contract: ${key} -> ${value}`);
+      }
+    }
+
+    if (Object.keys(addresses).length > 0) {
+      console.log(`✅ Extracted ${Object.keys(addresses).length} contract addresses from contractDeployment`);
+      return addresses;
+    }
+  }
+
+  // 3. deploymentInfo field
   if (response.deploymentInfo && typeof response.deploymentInfo === 'object') {
     const deploymentInfo = response.deploymentInfo as Record<string, unknown>;
     const addresses: ContractAddressMap = {};
@@ -213,7 +237,7 @@ export function parseContractAddressesFromDeployment(
     }
   }
 
-  // 3. Look for any fields that look like Ethereum addresses
+  // 4. Look for any fields that look like Ethereum addresses
   const addresses: ContractAddressMap = {};
   for (const [key, value] of Object.entries(response)) {
     if (typeof value === 'string' &&
