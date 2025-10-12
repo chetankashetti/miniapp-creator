@@ -388,7 +388,7 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
 
     // Polling function for async job status
     const pollJobStatus = async (jobId: string): Promise<GeneratedProject> => {
-        const maxAttempts = 200; // Poll for up to ~16 minutes (200 * 5 seconds)
+        const maxAttempts = 80; // Poll for up to ~20 minutes (80 * 15 seconds)
         let attempt = 0;
 
         console.log(`🔄 Starting to poll job ${jobId}...`);
@@ -443,7 +443,7 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
                     clearInterval(pollInterval);
                     reject(error);
                 }
-            }, 5000); // Poll every 5 seconds
+            }, 15000); // Poll every 15 seconds
         });
     };
 

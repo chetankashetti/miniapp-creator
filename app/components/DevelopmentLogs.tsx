@@ -43,9 +43,9 @@ export function DevelopmentLogs({ onComplete }: DevelopmentLogsProps) {
     const [currentTipIndex, setCurrentTipIndex] = useState(0);
 
     useEffect(() => {
-        // SHORT loading screen (like original) - let actual generation happen in background
+        // Loading screen for 10 minutes - let actual generation happen in background
         // This prevents browser TCP timeout issues and provides better UX
-        const totalTime = 20 * 1000; // 20 seconds - enough time to show a nice loading animation
+        const totalTime = 10 * 60 * 1000; // 10 minutes - enough time to show project generation progress
         let currentTime = 0;
 
         const progressTimer = setInterval(() => {
@@ -54,8 +54,8 @@ export function DevelopmentLogs({ onComplete }: DevelopmentLogsProps) {
             setProgress(newProgress >= 100 ? 100 : newProgress);
         }, 100);
 
-        // Show first few stages quickly during the 20 second window
-        const quickStageDurations = [3000, 3000, 3000, 3000, 3000, 2000, 1000, 1000, 1000]; // Total: 20 seconds
+        // Show stages gradually during the 10 minute window
+        const quickStageDurations = [60000, 70000, 80000, 90000, 70000, 60000, 50000, 40000, 80000]; // Total: 600 seconds (10 minutes)
         const stageTimeouts: NodeJS.Timeout[] = [];
 
         let cumulativeTime = 0;
@@ -67,10 +67,10 @@ export function DevelopmentLogs({ onComplete }: DevelopmentLogsProps) {
             stageTimeouts.push(timeout);
         });
 
-        // Rotate tips every 5 seconds (faster since it's shorter)
+        // Rotate tips every 30 seconds (better pacing for longer animation)
         const tipRotation = setInterval(() => {
             setCurrentTipIndex((prev) => (prev + 1) % TIPS.length);
-        }, 5000);
+        }, 30000);
 
         const completionTimer = setTimeout(() => {
             clearInterval(progressTimer);
