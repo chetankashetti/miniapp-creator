@@ -2927,6 +2927,15 @@ CRITICAL REQUIREMENTS:
 - IF errors claim a function is missing: The function IS in the ABI, the component has the wrong name
 - CONTRACT INTERFACES ARE SOURCE OF TRUTH - components must match them, not vice versa
 
+⚠️ IMPORT PATH CASE SENSITIVITY - CRITICAL FOR PRODUCTION:
+- ALWAYS use exact case for import paths: '@/components/ui/Button' NOT '@/components/ui/button'
+- Boilerplate components use PascalCase: Button.tsx, Input.tsx, Card.tsx, Select.tsx, Tabs.tsx
+- Development (macOS/Windows) is case-insensitive BUT production (Railway/Linux) is case-sensitive
+- Wrong case = works locally but FAILS in production with "Module not found" error
+- Common mistakes to AVOID: 'button'→'Button', 'input'→'Input', 'card'→'Card', 'select'→'Select'
+- When adding missing imports: Check existing imports in the same file or similar files for correct casing
+- IF error is "Cannot find name 'Button'": Import from '@/components/ui/Button' (capital B)
+
 COMPILATION ERROR TYPES:
 1. TypeScript Errors: Fix type mismatches, missing imports, interface violations, function signatures
    - For readonly array errors: Use array spreading [...array] to convert to mutable
