@@ -4,12 +4,11 @@ import { executeDiffBasedPipeline } from '../diffBasedPipeline';
 
 // Mock the dependencies
 jest.mock('../llmOptimizer', () => ({
-  executeMultiStagePipeline: jest.fn().mockImplementation(async (userPrompt, currentFiles, callLLM, projectId, isInitialGeneration) => {
-    console.log('Mock executeMultiStagePipeline called with:', { userPrompt, isInitialGeneration });
-    
-    if (isInitialGeneration) {
-      // For initial generation, return complete files
-      return [
+  executeInitialGenerationPipeline: jest.fn().mockImplementation(async (userPrompt) => {
+    console.log('Mock executeInitialGenerationPipeline called with:', { userPrompt });
+    // Return mock generated files for initial generation
+    return {
+      files: [
         {
           filename: 'src/app/page.tsx',
           content: `'use client';
@@ -108,10 +107,21 @@ export default function App() {
   );
 }`
         }
-      ];
-    } else {
-      // For follow-up changes, return modified files
-      return [
+      ],
+      intentSpec: {
+        feature: "Token Airdrop",
+        requirements: ["Add wagmi hooks", "Implement airdrop logic"],
+        targetFiles: ["src/app/page.tsx"],
+        dependencies: [],
+        needsChanges: true
+      }
+    };
+  }),
+  executeFollowUpPipeline: jest.fn().mockImplementation(async (userPrompt) => {
+    console.log('Mock executeFollowUpPipeline called with:', { userPrompt });
+    // For follow-up changes, return modified files
+    return {
+      files: [
         {
           filename: 'src/app/page.tsx',
           content: `'use client';
@@ -214,8 +224,15 @@ export default function App() {
   );
 }`
         }
-      ];
-    }
+      ],
+      intentSpec: {
+        feature: "Add wallet address display",
+        requirements: ["Add wagmi hooks", "Display wallet address"],
+        targetFiles: ["src/app/page.tsx"],
+        dependencies: [],
+        needsChanges: true
+      }
+    };
   }),
   getStage0ContextGathererPrompt: jest.fn(),
   STAGE_MODEL_CONFIG: {}

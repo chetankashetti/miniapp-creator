@@ -4,13 +4,14 @@ import { FileDiff } from '../diffBasedPipeline';
 
 // Mock the dependencies
 jest.mock('../llmOptimizer', () => ({
-  executeMultiStagePipeline: jest.fn().mockImplementation(async (userPrompt, currentFiles, callLLM, projectId, isInitialGeneration) => {
-    console.log('Mock executeMultiStagePipeline called with:', { userPrompt, isInitialGeneration });
-    // Return mock generated files
-    return [
-      {
-        filename: 'src/app/page.tsx',
-        content: `'use client';
+  executeFollowUpPipeline: jest.fn().mockImplementation(async (userPrompt) => {
+    console.log('Mock executeFollowUpPipeline called with:', { userPrompt });
+    // Return mock generated files with proper structure
+    return {
+      files: [
+        {
+          filename: 'src/app/page.tsx',
+          content: `'use client';
 
 import { ConnectWallet } from '@/components/wallet/ConnectWallet';
 import { Tabs } from '@/components/ui/Tabs';
@@ -107,8 +108,16 @@ export default function App() {
     </div>
   );
 }`
+        }
+      ],
+      intentSpec: {
+        feature: "Add token airdrop functionality",
+        requirements: ["Add wagmi hooks", "Implement airdrop logic"],
+        targetFiles: ["src/app/page.tsx"],
+        dependencies: [],
+        needsChanges: true
       }
-    ];
+    };
   }),
   getStage0ContextGathererPrompt: jest.fn(),
   STAGE_MODEL_CONFIG: {}
@@ -129,6 +138,7 @@ jest.mock('../diffUtils', () => ({
   }),
   generateDiff: jest.fn(),
   validateDiff: jest.fn(),
+  validateDiffHunksAgainstFile: jest.fn(() => ({ isValid: true, errors: [] })),
   createMinimalDiff: jest.fn()
 }));
 jest.mock('../toolExecutionService');

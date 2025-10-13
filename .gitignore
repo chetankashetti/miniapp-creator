@@ -3,6 +3,8 @@
 # generated files
 /generated
 
+.temp-compilation
+
 # dependencies
 /node_modules
 /.pnp
