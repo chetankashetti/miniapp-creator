@@ -34,17 +34,49 @@ interface PreviewProps {
 export function Preview({ currentProject, onProjectSelect, onNewProject }: PreviewProps) {
     const [iframeError, setIframeError] = useState(false);
     const [isLoading, setIsLoading] = useState(true);
+    const [iframeKey, setIframeKey] = useState(0);
 
     if (!currentProject) {
         return (
-            <ProjectList 
+            <ProjectList
                 onProjectSelect={onProjectSelect || (() => {})}
                 onNewProject={onNewProject || (() => {})}
             />
         );
     }
 
-    const previewUrl = currentProject.previewUrl || currentProject.url;
+    // Prioritize vercelUrl over previewUrl over url
+    const previewUrl = currentProject.vercelUrl || currentProject.previewUrl || currentProject.url;
+
+    // If there's no deployment URL, show a message
+    if (!previewUrl) {
+        return (
+            <div className="h-full flex flex-col bg-white overflow-y-auto">
+                <div className="flex-1 flex items-center justify-center p-4">
+                    <div className="text-center max-w-md">
+                        <div className="text-6xl mb-4">🚀</div>
+                        <h3 className="text-xl font-semibold text-black mb-2">No Deployment Yet</h3>
+                        <p className="text-sm text-black-60 mb-6">
+                            This project hasn&apos;t been deployed yet. Use the chat to make changes and deploy your app.
+                        </p>
+                        <div className="bg-black-5 rounded-lg p-4 text-left">
+                            <p className="text-xs text-black-60 font-medium mb-2">💡 Tip:</p>
+                            <p className="text-xs text-black-60">
+                                Ask the AI to &quot;deploy this project&quot; or make changes to trigger a deployment.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
+    console.log('🔍 Preview component - URLs:', {
+        vercelUrl: currentProject.vercelUrl,
+        previewUrl: currentProject.previewUrl,
+        url: currentProject.url,
+        selectedUrl: previewUrl
+    });
 
     const handleIframeError = () => {
         console.error('Iframe failed to load:', previewUrl);
@@ -71,35 +103,43 @@ export function Preview({ currentProject, onProjectSelect, onNewProject }: Previ
                         )}
                         {iframeError && (
                             <div className="absolute inset-0 flex flex-col items-center justify-center bg-white rounded-[32px] z-10 p-4">
-                                <div className="text-sm text-red-600 mb-2 text-center">
-                                    Preview failed to load
+                                <div className="text-sm text-red-600 mb-2 text-center font-semibold">
+                                    Preview blocked by deployment
                                 </div>
-                                <div className="text-xs text-gray-500 mb-3 text-center">
-                                    URL: {previewUrl}
+                                <div className="text-xs text-gray-600 mb-1 text-center">
+                                    The deployed app refused iframe embedding
                                 </div>
+                                <div className="text-xs text-gray-400 mb-4 text-center break-all px-2">
+                                    {previewUrl}
+                                </div>
+                                <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-4 max-w-[280px]">
+                                    <p className="text-xs text-blue-800 mb-2">
+                                        💡 <strong>Why this happens:</strong>
+                                    </p>
+                                    <p className="text-xs text-blue-700">
+                                        Vercel deployments block iframe embedding for security. The app needs to be redeployed with updated security headers.
+                                    </p>
+                                </div>
+                                <button
+                                    onClick={() => window.open(previewUrl, '_blank')}
+                                    className="px-4 py-2 bg-black text-white text-sm rounded hover:bg-gray-800 font-medium mb-2"
+                                >
+                                    Open in New Tab
+                                </button>
                                 <button
                                     onClick={() => {
                                         setIframeError(false);
                                         setIsLoading(true);
-                                        // Force iframe reload by changing src
-                                        const iframe = document.querySelector('iframe') as HTMLIFrameElement;
-                                        if (iframe) {
-                                            iframe.src = iframe.src;
-                                        }
+                                        setIframeKey(prev => prev + 1);
                                     }}
-                                    className="px-3 py-1 bg-blue-500 text-white text-xs rounded hover:bg-blue-600"
+                                    className="px-3 py-1 text-gray-600 text-xs rounded hover:text-black"
                                 >
                                     Retry
-                                </button>
-                                <button
-                                    onClick={() => window.open(previewUrl, '_blank')}
-                                    className="mt-2 px-3 py-1 bg-gray-500 text-white text-xs rounded hover:bg-gray-600"
-                                >
-                                    Open in New Tab
                                 </button>
                             </div>
                         )}
                         <iframe
+                            key={`${currentProject.projectId}-${iframeKey}`}
                             src={previewUrl}
                             className="w-full h-full rounded-[32px] border-0 bg-white"
                             title="Generated App Preview"

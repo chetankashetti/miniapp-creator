@@ -319,6 +319,9 @@ export interface IntentSpec {
   // New field to indicate if changes are needed
   needsChanges: boolean;
   reason?: string; // Why changes are needed or not needed
+  // Web3 classification fields
+  isWeb3: boolean; // true if this requires blockchain/smart contracts
+  storageType: "blockchain" | "localStorage" | "none"; // How data should be persisted
 }
 
 export function getStage1IntentParserPrompt(): string {
@@ -398,7 +401,9 @@ OUTPUT FORMAT (JSON ONLY):
   "contractInteractions": {
     "reads": ["contract functions to read"],
     "writes": ["contract functions to write"]
-  }
+  },
+  "isWeb3": boolean,
+  "storageType": "blockchain" | "localStorage" | "none"
 }
 
 RULES:
@@ -414,8 +419,49 @@ RULES:
 - Return valid JSON only
 - NO EXPLANATIONS, NO TEXT, ONLY JSON
 
-EXAMPLE  1:
-User: “Create a miniapp with a token airdrop component”
+🚨 WEB3 VS NON-WEB3 CLASSIFICATION (CRITICAL):
+
+Analyze the user request and determine storage strategy:
+
+WEB3 IDEAS (isWeb3: true, storageType: "blockchain"):
+- NFT minting, collections, galleries, or trading
+- Token creation, transfers, swaps, or management
+- DeFi features: staking, lending, liquidity pools, yield farming
+- On-chain voting, governance, or polls (where immutability matters)
+- Blockchain games with asset ownership or trading
+- Crypto airdrops or token distributions
+- Smart contract-based escrow or payments
+- Any feature requiring trustless, immutable, or decentralized records
+- Direct blockchain/contract interactions
+
+NON-WEB3 IDEAS (isWeb3: false, storageType: "localStorage"):
+- Social features: posts, likes, comments, followers
+- User profiles, preferences, and settings
+- Leaderboards, high scores, achievements
+- Todo lists, notes, task management, productivity tools
+- Content feeds, timelines, news aggregators
+- Quiz games, trivia apps, educational content
+- Traditional CRUD applications
+- Analytics dashboards, data visualization
+- Messaging, chat, or communication features
+- File uploads, image galleries (non-NFT)
+- Any feature that doesn't need blockchain guarantees
+
+CLASSIFICATION EXAMPLES:
+✅ "Create a leaderboard app" → isWeb3: false, storageType: "localStorage"
+✅ "Build an NFT gallery" → isWeb3: true, storageType: "blockchain"
+✅ "Make a voting dApp" → isWeb3: true, storageType: "blockchain"
+✅ "Quiz game with scores" → isWeb3: false, storageType: "localStorage"
+✅ "Token airdrop app" → isWeb3: true, storageType: "blockchain"
+✅ "Todo list miniapp" → isWeb3: false, storageType: "localStorage"
+✅ "Social media feed" → isWeb3: false, storageType: "localStorage"
+✅ "NFT minting platform" → isWeb3: true, storageType: "blockchain"
+
+IMPORTANT: If unclear, default to non-web3 (localStorage) unless the user explicitly mentions:
+- NFTs, tokens, crypto, blockchain, smart contracts, DeFi, on-chain, decentralized
+
+EXAMPLE  1 (Web3 App):
+User: "Create a miniapp with a token airdrop component"
 Output:
 {
   "feature": "Token Airdrop",
@@ -427,18 +473,25 @@ Output:
   "contractInteractions": {
     "reads": ["fetchTokenBalance", "fetchTokenAllowance", "fetchTokenTotalSupply"],
     "writes": ["transferTokens", "approveTokens", "mintTokens", "burnTokens"]
-  }
+  },
+  "isWeb3": true,
+  "storageType": "blockchain"
 }
 
-EXAMPLE 2:
-User: “Create miniapp”
+EXAMPLE 2 (No Changes):
+User: "Create miniapp"
 Output:
-{"feature":"bootstrap","requirements":[],"targetFiles":[],"dependencies":[],"needsChanges":false,"reason":"no specific feature","contractInteractions":{"reads":[],"writes":[]}}
+{"feature":"bootstrap","requirements":[],"targetFiles":[],"dependencies":[],"needsChanges":false,"reason":"no specific feature","contractInteractions":{"reads":[],"writes":[]},"isWeb3":false,"storageType":"none"}
 
-EXAMPLE 3:
-User: “Add polls feature to miniapp”
+EXAMPLE 3 (Web3 App):
+User: "Add polls feature to miniapp"
 Output:
-{"feature":"polls","requirements":["createPoll","castVote","fetchPollResults","display in tabs","use useUser for authentication"],"targetFiles":["src/app/page.tsx"],"dependencies":[],"needsChanges":true,"reason":"polls require new UI and contract integration in tab layout","contractInteractions":{"reads":["fetchPollResults","getPollById"],"writes":["createPoll","castVote"]}}
+{"feature":"polls","requirements":["createPoll","castVote","fetchPollResults","display in tabs","use useUser for authentication"],"targetFiles":["src/app/page.tsx"],"dependencies":[],"needsChanges":true,"reason":"polls require new UI and contract integration in tab layout","contractInteractions":{"reads":["fetchPollResults","getPollById"],"writes":["createPoll","castVote"]},"isWeb3":true,"storageType":"blockchain"}
+
+EXAMPLE 4 (Non-Web3 App):
+User: "Create a leaderboard app with high scores"
+Output:
+{"feature":"leaderboard","requirements":["display top 10 scores","allow users to submit scores","use localStorage for persistence","show empty state when no scores"],"targetFiles":["src/app/page.tsx"],"dependencies":[],"needsChanges":true,"reason":"leaderboard requires new UI and localStorage integration","contractInteractions":{"reads":[],"writes":[]},"isWeb3":false,"storageType":"localStorage"}
 REMEMBER: Return ONLY the JSON object above. No other text, no explanations, no markdown formatting.
 `;
 }
@@ -809,6 +862,228 @@ REMEMBER: Return ONLY the JSON object above surrounded by __START_JSON__ and __E
   }
 }
 
+// ========================================================================
+// MODULAR RULE FUNCTIONS - DRY PRINCIPLE
+// ========================================================================
+
+function getCoreGenerationRules(): string {
+  return `
+CODE GENERATION CORE RULES:
+- Mobile-first design (~375px width) with tab-based layout
+- Use useUser hook: const { username, fid, isMiniApp, isLoading } = useUser()
+- Use Tabs component from @/components/ui/Tabs for navigation
+- Follow patch plan fields exactly (purpose, description, location, dependencies)
+- Include all required imports and implement contract interactions when specified
+- Prefer neutral colors with subtle accents, ensure good contrast and accessibility
+- Do not change wagmi.ts file - it has everything you need
+- Do not edit package.json unless absolutely necessary
+`;
+}
+
+function getClientDirectiveRules(): string {
+  return `
+CLIENT DIRECTIVE (CRITICAL - BUILD FAILS IF MISSING):
+🚨 MANDATORY: Every React component file MUST start with 'use client'; directive as the FIRST line
+Pattern: 'use client'; (exactly this format with semicolon)
+Required in ALL files with: React hooks, event handlers, or interactive JSX
+`;
+}
+
+function getFarcasterAuthRules(): string {
+  return `
+FARCASTER AUTHENTICATION (MUST PRESERVE):
+- ALWAYS import ConnectWallet: import { ConnectWallet } from '@/components/wallet/ConnectWallet';
+- ALWAYS use useUser to get auth state: const { isMiniApp, username, address } = useUser();
+- ALWAYS show loading state: if (isLoading) return <div>Loading...</div>;
+- Handle both Farcaster miniapp AND browser wallet modes
+- NEVER remove authentication logic
+
+🚨 CRITICAL: APP MUST WORK IN BOTH ENVIRONMENTS
+- Use condition: {isMiniApp || address ? <MainApp /> : <ConnectWallet />}
+- This allows app to work in BOTH Farcaster miniapp AND browser
+- Miniapp users: Authenticated via Farcaster (isMiniApp === true)
+- Browser users: Must connect wallet first (address !== null)
+- NEVER gate functionality behind ONLY isMiniApp - always include address check
+
+CORRECT PATTERN:
+{isMiniApp || address ? (
+  <main><!-- Full app functionality --></main>
+) : (
+  <div><!-- Connect wallet prompt --></div>
+)}
+
+INCORRECT PATTERN:
+❌ {isMiniApp ? <App /> : <ConnectWallet />}  // Wrong: Excludes browser users
+`;
+}
+
+function getMockDataRules(): string {
+  return `
+🚨 NO MOCK/FAKE DATA - REAL FUNCTIONALITY ONLY:
+
+FORBIDDEN:
+❌ Hardcoded user arrays with fake data
+❌ Mock leaderboard/score data
+❌ Placeholder content or lorem ipsum
+❌ Pre-populated lists with fake entries
+
+REQUIRED:
+✅ Use REAL authentication from useAccount() or useUser()
+✅ Store data based on storageType (localStorage or blockchain)
+✅ Show EMPTY STATES when no data exists
+✅ Implement REAL data persistence and retrieval
+`;
+}
+
+function getEslintRules(): string {
+  return `
+ESLINT COMPLIANCE (CRITICAL):
+- Remove unused variables/imports
+- Include all useEffect dependencies
+- Use useCallback for functions in useEffect deps
+- Use const instead of let when never reassigned
+- Escape JSX entities: &apos; &quot; &amp;
+- NEVER call React hooks inside callbacks/loops/conditions
+- Include imports for all used hooks/components/functions
+`;
+}
+
+function getLocalStorageRules(): string {
+  return `
+=== LOCALSTORAGE PATTERN (NON-WEB3 APPS) ===
+
+Create useLocalStorage hook in src/hooks/useLocalStorage.ts:
+---
+'use client';
+import { useState, useEffect } from 'react';
+
+export function useLocalStorage<T>(key: string, initialValue: T): [T, (value: T | ((prev: T) => T)) => void] {
+  const [storedValue, setStoredValue] = useState<T>(initialValue);
+
+  useEffect(() => {
+    try {
+      const item = window.localStorage.getItem(key);
+      if (item) setStoredValue(JSON.parse(item));
+    } catch (error) {
+      console.error('Error loading from localStorage:', error);
+    }
+  }, [key]);
+
+  const setValue = (value: T | ((prev: T) => T)) => {
+    try {
+      const valueToStore = value instanceof Function ? value(storedValue) : value;
+      setStoredValue(valueToStore);
+      window.localStorage.setItem(key, JSON.stringify(valueToStore));
+    } catch (error) {
+      console.error('Error saving to localStorage:', error);
+    }
+  };
+
+  return [storedValue, setValue];
+}
+---
+
+Usage: const [data, setData] = useLocalStorage<DataType[]>('key', []);
+Always show empty states when data.length === 0
+`;
+}
+
+function getWeb3Rules(): string {
+  return `
+=== SMART CONTRACT PATTERN (WEB3 APPS) ===
+
+CONTRACT ADDRESS SETUP:
+✅ Use placeholder initially: const CONTRACT_ADDRESS = '0x0000000000000000000000000000000000000000' as \`0x\${string}\`;
+✅ Add deployment comment: // TODO: Deploy contract and replace address
+✅ Prevent calls to undeployed contracts:
+   const { data } = useReadContract({
+     address: CONTRACT_ADDRESS,
+     abi: ABI,
+     functionName: 'fn',
+     query: { enabled: CONTRACT_ADDRESS !== '0x0000000000000000000000000000000000000000' }
+   });
+
+WAGMI TYPE REQUIREMENTS:
+🚨 Address MUST use: \`0x\${string}\` type assertion
+🚨 ABI MUST use: as const assertion
+🚨 Query config MUST be wrapped: query: { enabled: condition }
+
+CORRECT PATTERNS:
+✅ useReadContract({ address: addr as \`0x\${string}\`, abi: ABI, functionName: 'fn', query: { enabled: !!addr } })
+✅ useWriteContract with type assertions
+
+BIGINT:
+✅ Use literals: 0n, 1n (not BigInt(0))
+✅ Convert for display: Number(value) or value.toString()
+
+ACCESS CONTROL:
+- Public minting: Remove onlyOwner or add public mint function
+- Owner-only: Keep onlyOwner modifier
+- Paid minting: Add payable with require(msg.value >= PRICE)
+`;
+}
+
+function getJsonFormattingRules(): string {
+  return `
+JSON FORMATTING:
+- Escape quotes as \\", newlines as \\n, backslashes as \\\\
+- Example: "content": "'use client';\\n\\nimport { useState } from \\"react\\";\\n"
+🚨 For .json files: Use SAME escaping as .ts/.tsx files (NOT double-escaped)
+`;
+}
+
+function getDiffGenerationRules(): string {
+  return `
+DIFF-BASED APPROACH:
+- Use provided diffHunks and unifiedDiff from patch plan
+- Apply surgical changes using unified diff format
+- Preserve existing code structure, modify only necessary lines
+- For new files, generate complete content
+- Validate diffs are minimal and precise
+
+LINE NUMBER CALCULATION:
+- Calculate based on ACTUAL current file content (with line numbers)
+- Use numbered lines (e.g., "5|import { useState }") for exact positions
+- Include 2-3 context lines before and after changes
+- oldLines = context lines + removed lines (- prefix)
+- newLines = context lines + added lines (+ prefix)
+
+DIFF VALIDATION:
+- Every hunk MUST start and end with context lines (space prefix)
+- Line counts MUST match actual number of lines in hunk
+- Context lines MUST exactly match numbered content
+- NEVER use 0 for oldLines or newLines
+
+CRITICAL: 'use client' DIRECTIVE IN DIFFS:
+- The 'use client' directive is ALREADY in the original file
+- DO NOT include it in your diff - it's already there
+- Account for it when calculating line numbers
+`;
+}
+
+function getOutputFormatRules(isInitialGeneration: boolean): string {
+  if (isInitialGeneration) {
+    return `
+OUTPUT FORMAT - INITIAL GENERATION:
+Generate complete files as JSON array:
+__START_JSON__
+[{"filename": "path/to/file", "content": "complete file content"}]
+__END_JSON__
+`;
+  } else {
+    return `
+OUTPUT FORMAT - FOLLOW-UP CHANGES:
+Generate diffs/files as JSON array:
+__START_JSON__
+[
+  {"filename": "path", "operation": "modify", "unifiedDiff": "@@ ... @@", "diffHunks": [...]},
+  {"filename": "new/path", "operation": "create", "content": "complete content"}
+]
+__END_JSON__
+`;
+  }
+}
+
 // Stage 3: Code Generator Types and Prompts
 //
 // PURPOSE: Stage 3 generates ACTUAL CODE based on the detailed patch plan from Stage 2.
@@ -823,6 +1098,13 @@ export function getStage3CodeGeneratorPrompt(
   currentFiles: { filename: string; content: string }[],
   isInitialGeneration: boolean = false
 ): string {
+  // Build modular prompt based on intent
+  const storageRules = intentSpec.storageType === 'localStorage'
+    ? getLocalStorageRules()
+    : intentSpec.storageType === 'blockchain'
+    ? getWeb3Rules()
+    : '';
+
   if (isInitialGeneration) {
     return `
 ROLE: Code Generator for Farcaster Miniapp - Initial Generation
@@ -839,252 +1121,14 @@ ${JSON.stringify(FARCASTER_BOILERPLATE_CONTEXT, null, 2)}
 
 TASK: Generate complete file contents based on the detailed patch plan for initial project generation
 
-GENERATION APPROACH:
-- Generate complete file contents (not diffs) for initial generation
-- Follow patch plan fields: purpose, description, location, dependencies, contractInteraction
-- Mobile-first design (~375px) with tab-based layout in src/app/page.tsx
-- Use wagmi hooks for contract interactions, don't modify wagmi.ts or package.json
-
-CRITICAL: Return ONLY valid JSON. Surround the JSON with EXACT markers:
-__START_JSON__
-{ ... your JSON ... }
-__END_JSON__
-Nothing else before/after the markers. Do not include any explanatory text, comments, or additional content outside the JSON markers.
-
-OUTPUT FORMAT - INITIAL GENERATION:
-Generate a JSON array of complete files:
-__START_JSON__
-[
-  {
-    "filename": "path/to/file",
-    "content": "complete file content"
-  }
-]
-__END_JSON__
-Nothing else before/after the markers. Do not include any explanatory text, comments, or additional content outside the JSON markers.
-
-JSON FORMATTING:
-- Escape quotes as \\\", newlines as \\n, backslashes as \\\\
-- Example: "content": "'use client';\\n\\nimport { useState } from \\\"react\\\";\\n\\nconst Component = () => {\\n  const [state, setState] = useState();\\n  return <div>Hello</div>;\\n};"
-
-🚨 CRITICAL WARNING - COMMON MISTAKE WITH JSON FILES:
-When generating package.json or any .json file, it is STILL just a text string in the "content" field.
-❌ WRONG: Double-escaping like {\\\\n  \\\\\\\"name\\\\\\\": \\\\\\\"foo\\\\\\\"...
-✅ CORRECT: Single-escaping like {\\n  \\\"name\\\": \\\"foo\\\"...
-Treat JSON files identically to .tsx/.ts files - they all go in a string field with the same escaping!
-
-CODE GENERATION RULES:
-- Generate complete file contents based on patch plan descriptions
-- Use useUser hook: const { username, fid, isMiniApp, isLoading } = useUser()
-- Use Tabs component from @/components/ui/Tabs for navigation
-- Follow patch plan fields exactly (purpose, description, location, dependencies)
-- Include all required imports and implement contract interactions when specified
-- Prefer neutral colors with subtle accents, ensure good contrast and accessibility
-
-CLIENT DIRECTIVE REQUIREMENTS (CRITICAL - BUILD WILL FAIL IF MISSING):
-🚨 MANDATORY: Every React component file MUST start with 'use client'; directive
-🚨 MANDATORY: This is the FIRST line of EVERY file that uses React features
-🚨 MANDATORY: Without this directive, the build will fail with hydration errors
-
-REQUIRED FILES:
-- src/app/page.tsx (ALWAYS needs 'use client')
-- src/components/*.tsx (ALL component files)
-- src/components/ui/*.tsx (ALL UI component files)
-- ANY file with React hooks: useState, useEffect, useCallback, useMemo, useRef, useContext, useReducer
-- ANY file with event handlers: onClick, onChange, onSubmit, onFocus, onBlur, onKeyDown, onKeyUp
-- ANY file with interactive JSX components
-
-EXACT PATTERN REQUIRED:
-'use client';
-
-import { useState } from 'react';
-// ... rest of component
-
-CRITICAL VALIDATION:
-- First line MUST be exactly: 'use client';
-- NO quotes around the directive
-- NO variations like "use client" or 'use client' without semicolon
-- MUST be the very first line of the file
-- NO empty lines before the directive
-
-FARCASTER AUTHENTICATION (CRITICAL - MUST PRESERVE):
-- ALWAYS import and keep ConnectWallet: import { ConnectWallet } from '@/components/wallet/ConnectWallet';
-- ALWAYS render ConnectWallet for non-miniapp users: {!isMiniApp && <ConnectWallet />}
-- ALWAYS use useUser hook to detect miniapp vs browser: const { isMiniApp, username, address } = useUser();
-- ALWAYS show loading state: if (isLoading) return <div>Loading...</div>;
-- ALWAYS handle both Farcaster miniapp AND browser wallet modes
-- For miniapp users: Show username, fid, displayName from useUser()
-- For browser users: Show ConnectWallet button and address from useUser()
-- NEVER remove authentication logic even if user doesn't explicitly mention it
-- Example pattern MUST be preserved:
-  {isMiniApp ? (
-    <div>Welcome @{username}</div>
-  ) : (
-    <ConnectWallet />
-  )}
-
-
-=== SMART CONTRACT PATTERNS ===
-BLOCKCHAIN: Use pre-vetted templates (ERC20Template.sol, ERC721Template.sol, EscrowTemplate.sol), modify contracts/scripts/deploy.js, include ABI placeholders
-- 🚨 CLIENT DIRECTIVE: ALWAYS start React component files with 'use client'; directive (CRITICAL - MISSING THIS CAUSES BUILD FAILURE)
-- 🚨 CLIENT DIRECTIVE: This MUST be the first line of EVERY React component file
-- 🚨 CLIENT DIRECTIVE: Pattern: 'use client'; (exactly this format, no variations)
-
-NFT/TOKEN CONTRACTS:
-- Multi-type tokens need: mapping(uint256 => uint256) public tokenToType; store on mint
-- Soulbound: check per-token via tokenToType, allow mint/burn even if soulbound
-- Track ownership: mapping(address => mapping(uint256 => bool)) userOwnsType
-- Use counters for IDs, OpenZeppelin imports for standards
-
-🚨 CRITICAL: CONTRACT ACCESS CONTROL PATTERNS (ANALYZE USER REQUIREMENT CAREFULLY):
-PUBLIC MINTING (users can mint):
-- User says: "free mint", "anyone can mint", "public minting", "one-click mint"
-- Pattern: Remove 'onlyOwner' modifier from mint functions OR add separate public mint function
-- Example: function publicMint(address to, string memory tokenUri) public { ... }
-- Add minting limits: mapping(address => uint256) public mintCount; require(mintCount[msg.sender] < MAX_PER_WALLET)
-
-OWNER-ONLY MINTING (admin controls):
-- User says: "admin mints", "controlled minting", "airdrop only"
-- Pattern: Keep 'onlyOwner' modifier on mint functions
-- Example: function safeMint(address to, string memory tokenUri) public onlyOwner { ... }
-
-PAID MINTING (users pay to mint):
-- User says: "paid mint", "mint for 0.01 ETH", "selling NFTs"
-- Pattern: function mint() public payable { require(msg.value >= MINT_PRICE); ... }
-- Add withdraw function for owner to collect funds
-
-ALWAYS CHECK: If user wants "free minting" or "gallery with mint buttons", use PUBLIC MINTING pattern!
-
-SOLIDITY:
-- Use require() with descriptive errors, comprehensive events with indexed params
-- Gas optimize: appropriate types, pack structs, memory/calldata correctly
-- Access control: Ownable/AccessControl, ReentrancyGuard for external calls
-- Multi-return @return tags: @return id Token ID, @return owner Owner address (never generic)
-
-DEPLOYMENT:
-- Save JSON: {ContractName: "0x...", network, chainId, rpcUrl, deployer, timestamp, txHashes}
-- try-catch, verify args, env vars for secrets, log progress clearly
-
-FRONTEND INTEGRATION:
-- TypeScript types from ABIs, wagmi hooks (useContractRead/Write/WaitForTransaction)
-- Handle tx states: idle→loading→success/error, show progress, estimate gas, cache reads
-
-BIGINT USAGE (tsconfig.json target is ES2020, BigInt is supported):
-✅ Use BigInt literals for comparisons:
-if (balance !== 0n) { ... }  // Correct: use 0n, 1n, 2n syntax
-if (balance === 1n) { ... }
-
-✅ Convert contract return values (already BigInt):
-const amount = Number(contractData);  // For display only
-const count = contractData.toString();  // For display
-
-❌ Don't use BigInt() constructor for literals:
-if (balance === BigInt(0)) { ... }  // Wrong: use 0n instead
-if (balance !== BigInt(1)) { ... }  // Wrong: use 1n instead
-
-BEST PRACTICES:
-- Contract return values from wagmi are already BigInt type
-- Use literal syntax (0n, 1n, etc.) for comparisons
-- Convert to Number/String only for display purposes
-- Always handle BigInt in TypeScript with proper type guards
-
-WAGMI TYPE REQUIREMENTS (CRITICAL - BUILD WILL FAIL IF VIOLATED):
-🚨 MANDATORY: Contract addresses MUST use \`0x\${string}\` type assertion
-🚨 MANDATORY: ABIs MUST use 'as const' assertion
-🚨 MANDATORY: Never spread config objects directly into wagmi hooks without proper types
-
-CORRECT PATTERNS:
-✅ Contract config with type assertions:
-const CONTRACT_CONFIG = {
-  address: '0x0000000000000000000000000000000000000000' as \`0x\${string}\`,
-  abi: [...] as const,
-  chainId: 84532
-} as const;
-
-✅ Using useReadContract with query config (IMPORTANT: use 'query' wrapper for enabled):
-const { data } = useReadContract({
-  address: CONTRACT_CONFIG.address,  // Already typed as \`0x\${string}\`
-  abi: CONTRACT_CONFIG.abi,
-  functionName: 'getData',
-  query: {
-    enabled: CONTRACT_CONFIG.address !== '0x0000000000000000000000000000000000000000',
-  },
-});
-
-✅ Using useReadContract with args and conditional execution:
-const { data } = useReadContract({
-  address: contractAddress as \`0x\${string}\`,
-  abi: CONTRACT_ABI,
-  functionName: 'getUserData',
-  args: userAddress ? [userAddress] : undefined,
-  query: {
-    enabled: !!contractAddress && !!userAddress,
-  },
-});
-
-✅ Using useWriteContract:
-const { writeContract } = useWriteContract();
-const handleWrite = () => {
-  writeContract({
-    address: CONTRACT_ADDRESS as \`0x\${string}\`,
-    abi: CONTRACT_ABI,
-    functionName: 'myFunction',
-    args: [arg1, arg2],
-  });
-};
-
-INCORRECT PATTERNS (WILL CAUSE BUILD FAILURE):
-❌ Missing type assertion on address:
-const CONTRACT_CONFIG = {
-  address: '0x...',  // Wrong: inferred as 'string', not '\`0x\${string}\`'
-  abi: [...]
-};
-
-❌ Spreading config without types:
-const { data } = useReadContract({
-  ...CONTRACT_CONFIG,  // Wrong: address type doesn't match
-  functionName: 'getData',
-});
-
-❌ Wrong query config - enabled at top level (WILL FAIL):
-const { data } = useReadContract({
-  address: CONTRACT_ADDRESS as \`0x\${string}\`,
-  abi: CONTRACT_ABI,
-  functionName: 'getData',
-  enabled: true,  // Wrong: must be wrapped in 'query' object
-});
-
-❌ Missing query wrapper:
-const { data } = useReadContract({
-  address: CONTRACT_ADDRESS as \`0x\${string}\`,
-  abi: CONTRACT_ABI,
-  functionName: 'getData',
-  args: [someArg],
-  enabled: !!someArg,  // Wrong: must be inside query: { enabled: !!someArg }
-});
-
-ESLINT COMPLIANCE (CRITICAL - BUILD WILL FAIL IF VIOLATED):
-- Remove unused variables from destructuring: const { used, unused } = hook() → const { used } = hook()
-- IMPORT HANDLING: Only remove imports that are TRULY unused - check if imported items are used anywhere in the file
-- IMPORT VALIDATION: Before removing any import, verify it's not used in: function calls, destructuring, JSX components, or hook calls
-- Remove unused imports ONLY if imported items are not used anywhere: import { used, unused } from 'module' → import { used } from 'module'
-- Include all dependencies in useEffect: useEffect(() => { fn(); }, [fn])
-- Use useCallback for functions in useEffect deps: const fn = useCallback(() => {}, [deps])
-- Include ALL dependencies in useCallback hooks: useCallback(() => { doSomething(dep1, dep2); }, [dep1, dep2])
-- Never declare variables that aren't used in the component
-- Never import modules that aren't used in the component
-- CRITICAL: Always include imports for hooks that are called: if you use useTodos(), you MUST import useTodos
-- CRITICAL: Always include imports for components that are rendered: if you use <TodoList />, you MUST import TodoList
-- CRITICAL: Always include imports for functions that are called: if you call clearAll(), you MUST import the hook that provides it
-- Always use all imported modules and declared variables
-- NEVER call React hooks inside callbacks, loops, or conditions: use hooks only at the top level of components
-- Use for loops instead of Array.from() when calling hooks: for (let i = 0; i < count; i++) { useHook() }
-- Use const instead of let when variables are never reassigned: let x = 5 → const x = 5
-- Escape JSX entities: use &apos; for apostrophes, &quot; for quotes, &amp; for ampersands
-- NEVER use 'let' for variables that are never reassigned - ALWAYS use 'const' (prefer-const rule)
-- React Hook dependencies: Include ALL values from component scope (props, state, context) that are used inside the callback
-- NEVER use empty interfaces: export interface Props extends BaseProps {} → export type Props = BaseProps;
-- Return valid JSON array only - NO EXPLANATIONS, NO TEXT, ONLY JSON
+${getCoreGenerationRules()}
+${getClientDirectiveRules()}
+${getFarcasterAuthRules()}
+${getMockDataRules()}
+${storageRules}
+${getEslintRules()}
+${getJsonFormattingRules()}
+${getOutputFormatRules(true)}
 
 REMEMBER: Return ONLY the JSON array above surrounded by __START_JSON__ and __END_JSON__ markers. No other text, no explanations, no markdown formatting.
 `;
@@ -1109,212 +1153,15 @@ ${JSON.stringify(FARCASTER_BOILERPLATE_CONTEXT, null, 2)}
 
 TASK: Generate unified diff patches based on the detailed patch plan. Apply surgical changes using the provided diff hunks rather than rewriting entire files. For new files, generate complete content. For modifications, output only the unified diff patches.
 
-DIFF-BASED APPROACH:
-- Use the provided diffHunks and unifiedDiff from the patch plan
-- Apply surgical changes to existing files using unified diff format
-- Preserve existing code structure and only modify necessary lines
-- For new files, generate complete file content
-- Validate that diffs are minimal and precise
-
-CRITICAL: 'use client' DIRECTIVE IN DIFFS:
-- The 'use client' directive is ALREADY present in the original file
-- DO NOT include 'use client' in your unified diff - it's already there
-- Account for the 'use client' line when calculating line numbers
-- If the original file starts with 'use client', your diff should start from line 2 (after the directive)
-- Example: If you see "import { ... }" in the current file, it's actually line 2, not line 1
-
-CRITICAL LINE NUMBER CALCULATION:
-- ALWAYS calculate line numbers based on the ACTUAL current file content provided above (with line numbers)
-- Count lines in the current file to determine correct oldStart, oldLines, newStart, newLines
-- Use the numbered lines (e.g., "  5|import { useState }") to determine exact line positions
-- REQUIRED: Include 2-3 context lines (unchanged lines with space prefix) before and after changes
-- Verify line numbers by cross-referencing the numbered content in CURRENT FILES section
-- oldLines = count of context lines + removed lines (lines with - prefix)
-- newLines = count of context lines + added lines (lines with + prefix)
-- DO NOT use example line numbers from this prompt - calculate them from the actual numbered content above
-
-EXAMPLE LINE NUMBER CALCULATION:
-If you want to modify line 10 and the numbered content shows:
-  8|import React from 'react';
-  9|import { Button } from './Button';
- 10|import { Input } from './Input';
- 11|
- 12|export function Component() {
-
-Then your diff hunk should be:
-oldStart: 8, oldLines: 5, newStart: 8, newLines: 6
-lines: [
-  " import React from 'react';",
-  " import { Button } from './Button';", 
-  "-import { Input } from './Input';",
-  "+import { Input, Select } from './Input';",
-  " ",
-  " export function Component() {"
-]
-
-CONTEXT LINE MATCHING RULES:
-- Context lines (space prefix) MUST exactly match the numbered content
-- Never use empty strings ("") as context lines unless the actual file has blank lines
-- Always include the exact text after the pipe (|) symbol from numbered content
-- Count blank lines correctly - they appear as numbered lines with nothing after the pipe
-
-DIFF VALIDATION RULES:
-- Every hunk MUST start and end with context lines (space prefix)  
-- Line counts MUST match the actual number of lines in the hunk
-- If adding 2 lines with 3 context lines: oldLines=3, newLines=5
-- If removing 1 line with 3 context lines: oldLines=4, newLines=3
-- NEVER use 0 for oldLines or newLines - always count actual lines
-
-IMPLEMENTATION GUIDANCE FROM PATCH PLAN:
-- Follow the "purpose" field for each file to understand the overall goal
-- Use the "description" field in each change to understand exactly what to implement
-- Use the "location" field to know where in the file to place the code
-- Use the "dependencies" field to ensure all required imports and hooks are included
-- Use the "contractInteraction" field to implement blockchain functionality correctly
-- Follow the "implementationNotes" for overall implementation approach
-
-FARCASTER REQUIREMENTS FOR MAIN PAGE:
-- Mobile-first design (~375px width) with tab-based layout
-- Single page app structure (all content in tab components within src/app/page.tsx)
-- For contract interactions use wagmi hooks with address from useAccount hook from wagmi
-- Do not change wagmi.ts file - it has everything you need
-- Do not edit package.json unless absolutely necessary
-- The app automatically works in both Farcaster miniapp and browser environments
-- The Mini App SDK exposes an EIP-1193 Ethereum Provider API at sdk.wallet.getEthereumProvider()
-
-CRITICAL: Return ONLY valid JSON. Surround the JSON with EXACT markers:
-__START_JSON__
-{ ... your JSON ... }
-__END_JSON__
-Nothing else before/after the markers. Do not include any explanatory text, comments, or additional content outside the JSON markers.
-
-OUTPUT FORMAT - FOLLOW-UP CHANGES:
-Generate a JSON array of file diffs and complete files:
-__START_JSON__
-[
-  {
-    "filename": "path/to/file",
-    "operation": "modify",
-    "unifiedDiff": "@@ -X,Y +X,Z @@\n context line before\n-old line to remove\n+new line to add\n context line after",
-    "diffHunks": [
-      {
-        "oldStart": X,
-        "oldLines": Y,
-        "newStart": X,
-        "newLines": Z,
-        "lines": [" context line before", "-old line to remove", "+new line to add", " context line after"]
-      }
-    ]
-  },
-  {
-    "filename": "path/to/newfile",
-    "operation": "create",
-    "content": "complete file content for new files"
-  }
-]
-__END_JSON__
-Nothing else before/after the markers. Do not include any explanatory text, comments, or additional content outside the JSON markers.
-
-JSON FORMATTING REQUIREMENTS:
-- Escape quotes as \\\" (backslash + quote, NOT double backslash + quote)
-- Escape newlines as \\n (backslash + n)
-- Escape backslashes as \\\\ (double backslash becomes single)
-- Content must be a single-line string with proper escaping
-- unifiedDiff content must also be properly escaped
-- Example: "content": "const { ethers } = require(\\\"hardhat\\\");\\n\\nasync function main() {\\n  console.log(\\\"Hello\\\");\\n}"
-
-🚨 CRITICAL - COMMON MISTAKE WITH JSON FILES:
-When generating package.json or any .json file in the "content" field, use the SAME escaping as .ts/.tsx files.
-❌ WRONG: {\\\\n  \\\\\\\"name\\\\\\\": ... (double-escaped)
-✅ CORRECT: {\\n  \\\"name\\\": ... (single-escaped)
-JSON files are plain text strings just like TypeScript files!
-
-CODE GENERATION RULES:
-- For existing files: Modify current content based on patch plan
-- For new files: Generate complete file contents based on patch plan descriptions
-- Use useUser hook: const { username, fid, isMiniApp, isLoading } = useUser()
-- Use Tabs component from @/components/ui/Tabs for navigation
-- Follow patch plan fields exactly (purpose, description, location, dependencies)
-- Include all required imports and implement contract interactions when specified
-- Preserve existing code structure when modifying files
-- Prefer neutral colors with subtle accents, ensure good contrast and accessibility
-
-CLIENT DIRECTIVE REQUIREMENTS (CRITICAL - BUILD WILL FAIL IF MISSING):
-🚨 MANDATORY: Every React component file MUST start with 'use client'; directive
-🚨 MANDATORY: This is the FIRST line of EVERY file that uses React features
-🚨 MANDATORY: Without this directive, the build will fail with hydration errors
-
-REQUIRED FILES:
-- src/app/page.tsx (ALWAYS needs 'use client')
-- src/components/*.tsx (ALL component files)
-- src/components/ui/*.tsx (ALL UI component files)
-- ANY file with React hooks: useState, useEffect, useCallback, useMemo, useRef, useContext, useReducer
-- ANY file with event handlers: onClick, onChange, onSubmit, onFocus, onBlur, onKeyDown, onKeyUp
-- ANY file with interactive JSX components
-
-EXACT PATTERN REQUIRED:
-'use client';
-
-import { useState } from 'react';
-// ... rest of component
-
-CRITICAL VALIDATION:
-- First line MUST be exactly: 'use client';
-- NO quotes around the directive
-- NO variations like "use client" or 'use client' without semicolon
-- MUST be the very first line of the file
-- NO empty lines before the directive
-
-FARCASTER AUTHENTICATION (CRITICAL - MUST PRESERVE):
-- ALWAYS import and keep ConnectWallet: import { ConnectWallet } from '@/components/wallet/ConnectWallet';
-- ALWAYS render ConnectWallet for non-miniapp users: {!isMiniApp && <ConnectWallet />}
-- ALWAYS use useUser hook to detect miniapp vs browser: const { isMiniApp, username, address } = useUser();
-- ALWAYS show loading state: if (isLoading) return <div>Loading...</div>;
-- ALWAYS handle both Farcaster miniapp AND browser wallet modes
-- For miniapp users: Show username, fid, displayName from useUser()
-- For browser users: Show ConnectWallet button and address from useUser()
-- NEVER remove authentication logic even if user doesn't explicitly mention it
-- NEVER delete or modify ConnectWallet import or rendering logic
-- When modifying page.tsx, PRESERVE the conditional rendering pattern for miniapp vs browser
-- Example pattern MUST be preserved:
-  {isMiniApp ? (
-    <div>Welcome @{username}</div>
-  ) : (
-    <ConnectWallet />
-  )}
-
-SOLIDITY DOCUMENTATION (CRITICAL):
-- For functions with multiple return values, use separate @return tags for each parameter
-- Example: @return id Poll ID, @return question Poll question, @return options Poll options array
-- NEVER use generic @return descriptions like "@return Poll data" - always specify each return parameter
-- Each @return tag must match the function's return parameters in order
-
-ESLINT COMPLIANCE (CRITICAL - BUILD WILL FAIL IF VIOLATED):
-- Remove unused variables from destructuring: const { used, unused } = hook() → const { used } = hook()
-- IMPORT HANDLING: Only remove imports that are TRULY unused - check if imported items are used anywhere in the file
-- IMPORT VALIDATION: Before removing any import, verify it's not used in: function calls, destructuring, JSX components, or hook calls
-- Remove unused imports ONLY if imported items are not used anywhere: import { used, unused } from 'module' → import { used } from 'module'
-- Include all dependencies in useEffect: useEffect(() => { fn(); }, [fn])
-- Use useCallback for functions in useEffect deps: const fn = useCallback(() => {}, [deps])
-- Include ALL dependencies in useCallback hooks: useCallback(() => { doSomething(dep1, dep2); }, [dep1, dep2])
-- Never declare variables that aren't used in the component
-- Never import modules that aren't used in the component
-- CRITICAL: Always include imports for hooks that are called: if you use useTodos(), you MUST import useTodos
-- CRITICAL: Always include imports for components that are rendered: if you use <TodoList />, you MUST import TodoList
-- CRITICAL: Always include imports for functions that are called: if you call clearAll(), you MUST import the hook that provides it
-- Always use all imported modules and declared variables
-- NEVER call React hooks inside callbacks, loops, or conditions: use hooks only at the top level of components
-- Use for loops instead of Array.from() when calling hooks: for (let i = 0; i < count; i++) { useHook() }
-- Use const instead of let when variables are never reassigned: let x = 5 → const x = 5
-- Escape JSX entities: use &apos; for apostrophes, &quot; for quotes, &amp; for ampersands
-- NEVER use 'let' for variables that are never reassigned - ALWAYS use 'const' (prefer-const rule)
-- React Hook dependencies: Include ALL values from component scope (props, state, context) that are used inside the callback
-- NEVER use empty interfaces: export interface Props extends BaseProps {} → export type Props = BaseProps;
-BLOCKCHAIN: Use pre-vetted templates (ERC20Template.sol, ERC721Template.sol, EscrowTemplate.sol), modify contracts/scripts/deploy.js, include ABI placeholders
-- 🚨 CLIENT DIRECTIVE: ALWAYS start React component files with 'use client'; directive (CRITICAL - MISSING THIS CAUSES BUILD FAILURE)
-- 🚨 CLIENT DIRECTIVE: This MUST be the first line of EVERY React component file
-- 🚨 CLIENT DIRECTIVE: Pattern: 'use client'; (exactly this format, no variations)
-- Return valid JSON array only - NO EXPLANATIONS, NO TEXT, ONLY JSON
+${getDiffGenerationRules()}
+${getCoreGenerationRules()}
+${getClientDirectiveRules()}
+${getFarcasterAuthRules()}
+${getMockDataRules()}
+${storageRules}
+${getEslintRules()}
+${getJsonFormattingRules()}
+${getOutputFormatRules(false)}
 
 REMEMBER: Return ONLY the JSON array above surrounded by __START_JSON__ and __END_JSON__ markers. No other text, no explanations, no markdown formatting.
 `;
@@ -1646,6 +1493,44 @@ export function validateImportsAndReferences(
 }
 
 // ========================================================================
+// FILE FILTERING UTILITIES
+// ========================================================================
+
+/**
+ * Filter boilerplate files based on web3 requirement
+ * Excludes contracts/ folder for non-web3 apps to save tokens and improve focus
+ *
+ * @param files - Array of files to filter
+ * @param isWeb3 - Whether the app requires web3/blockchain functionality
+ * @returns Filtered array of files
+ */
+export function filterFilesByWeb3Requirement(
+  files: { filename: string; content: string }[],
+  isWeb3: boolean
+): { filename: string; content: string }[] {
+  if (isWeb3) {
+    // Keep all files for web3 apps (including contracts)
+    console.log(`📦 Web3 app detected (isWeb3: true)`);
+    console.log(`📦 Including ALL ${files.length} files (with contracts/)`);
+    return files;
+  }
+
+  // Filter out contracts folder for non-web3 apps
+  const filtered = files.filter(file => {
+    const isContractFile = file.filename.startsWith('contracts/');
+    return !isContractFile;
+  });
+
+  const removed = files.length - filtered.length;
+  console.log(`📦 Non-web3 app detected (isWeb3: false)`);
+  console.log(`📦 Filtered out ${removed} contract files from contracts/`);
+  console.log(`📦 Sending ${filtered.length} files to LLM (contracts excluded)`);
+  console.log(`💰 Token savings: ~${removed * 150} tokens (estimated)`);
+
+  return filtered;
+}
+
+// ========================================================================
 // SHARED PIPELINE STAGES (Stage 1 & 2)
 // ========================================================================
 
@@ -1917,30 +1802,38 @@ export async function executeInitialGenerationPipeline(
       return { files: currentFiles, intentSpec };
     }
 
-    // Stage 2: Patch Planner
+    // 🎯 Filter files based on web3 requirement (after Stage 1, before Stage 2)
+    console.log("\n" + "=".repeat(50));
+    console.log("🔍 FILTERING FILES BASED ON WEB3 REQUIREMENT");
+    console.log("=".repeat(50));
+    const filteredFiles = filterFilesByWeb3Requirement(currentFiles, intentSpec.isWeb3);
+    console.log("✅ File filtering complete");
+
+    // Stage 2: Patch Planner (using filtered files)
     const patchPlan = await executeStage2PatchPlanner(
       userPrompt,
       intentSpec,
-      currentFiles,
+      filteredFiles, // ← Using filtered files instead of currentFiles
       callLLM,
       true, // isInitialGeneration = true
       projectId
     );
 
-    // Stage 3: Code Generator (Complete Files)
+    // Stage 3: Code Generator (Complete Files) - using filtered files
     const generatedFiles = await executeStage3InitialGeneration(
       userPrompt,
       patchPlan,
       intentSpec,
-      currentFiles,
+      filteredFiles, // ← Using filtered files instead of currentFiles
       callLLM,
       projectId
     );
 
-    // Stage 4: Validator (Complete Files)
+    // Stage 4: Validator (Complete Files) - using ORIGINAL files for validation context
+    // Note: Validator needs full file list to check imports/references correctly
     const validatedFiles = await executeStage4InitialValidation(
       generatedFiles,
-      currentFiles,
+      currentFiles, // ← Using original currentFiles for validation context
       callLLM,
       projectId,
       projectDir
@@ -2001,30 +1894,38 @@ export async function executeFollowUpPipeline(
       return { files: currentFiles, intentSpec };
     }
 
-    // Stage 2: Patch Planner (with diffs)
+    // 🎯 Filter files based on web3 requirement (after Stage 1, before Stage 2)
+    console.log("\n" + "=".repeat(50));
+    console.log("🔍 FILTERING FILES BASED ON WEB3 REQUIREMENT");
+    console.log("=".repeat(50));
+    const filteredFiles = filterFilesByWeb3Requirement(currentFiles, intentSpec.isWeb3);
+    console.log("✅ File filtering complete");
+
+    // Stage 2: Patch Planner (with diffs) - using filtered files
     const patchPlan = await executeStage2PatchPlanner(
       userPrompt,
       intentSpec,
-      currentFiles,
+      filteredFiles, // ← Using filtered files instead of currentFiles
       callLLM,
       false, // isInitialGeneration = false
       projectId
     );
 
-    // Stage 3: Code Generator (Diffs)
+    // Stage 3: Code Generator (Diffs) - using filtered files
     const filesWithDiffs = await executeStage3FollowUpGeneration(
       userPrompt,
       patchPlan,
       intentSpec,
-      currentFiles,
+      filteredFiles, // ← Using filtered files instead of currentFiles
       callLLM,
       projectId
     );
 
-    // Stage 4: Validator (Diffs)
+    // Stage 4: Validator (Diffs) - using ORIGINAL files for validation context
+    // Note: Validator needs full file list to check imports/references correctly
     const validatedFiles = await executeStage4FollowUpValidation(
       filesWithDiffs,
-      currentFiles,
+      currentFiles, // ← Using original currentFiles for validation context
       callLLM,
       projectId,
       projectDir
@@ -2641,6 +2542,18 @@ async function fixRailwayCompilationErrors(
     }
   }
 
+  // Validate ABI preservation before returning
+  console.log("\n🔍 Step 9: Validating ABI preservation...");
+  const validationResult = validateABIPreservation(railwayResult.files, finalFiles);
+
+  if (!validationResult.isValid) {
+    console.warn("\n⚠️ ABI VALIDATION WARNINGS:");
+    validationResult.warnings.forEach(warning => console.warn(`  ${warning}`));
+    console.warn("  → Original ABIs have been restored automatically");
+  } else {
+    console.log("  ✅ No ABI modifications detected");
+  }
+
   console.log("\n" + "=".repeat(60));
   console.log("🎉 STAGE 4: Railway Compilation Error Fixing Complete!");
   console.log("=".repeat(60));
@@ -2649,8 +2562,9 @@ async function fixRailwayCompilationErrors(
   console.log(`  - Files fixed: ${fixedFiles.length}`);
   console.log(`  - Files unchanged: ${unchangedFiles.length}`);
   console.log(`  - Original errors: ${railwayResult.errors.length}`);
+  console.log(`  - ABI validation: ${validationResult.isValid ? '✅ Passed' : '⚠️ Issues auto-fixed'}`);
   console.log("=".repeat(60));
-  
+
   return finalFiles;
 }
 
@@ -2845,6 +2759,18 @@ async function fixCompilationErrors(
     }
   }
 
+  // Validate ABI preservation before returning
+  console.log("\n🔍 Step 9: Validating ABI preservation...");
+  const validationResult = validateABIPreservation(compilationResult.files, finalFiles);
+
+  if (!validationResult.isValid) {
+    console.warn("\n⚠️ ABI VALIDATION WARNINGS:");
+    validationResult.warnings.forEach(warning => console.warn(`  ${warning}`));
+    console.warn("  → Original ABIs have been restored automatically");
+  } else {
+    console.log("  ✅ No ABI modifications detected");
+  }
+
   console.log("\n" + "=".repeat(60));
   console.log("🎉 STAGE 4: Compilation Error Fixing Complete!");
   console.log("=".repeat(60));
@@ -2853,9 +2779,114 @@ async function fixCompilationErrors(
   console.log(`  - Files fixed: ${fixedFiles.length}`);
   console.log(`  - Files unchanged: ${unchangedFiles.length}`);
   console.log(`  - Original errors: ${compilationResult.errors.length}`);
+  console.log(`  - ABI validation: ${validationResult.isValid ? '✅ Passed' : '⚠️ Issues auto-fixed'}`);
   console.log("=".repeat(60));
-  
+
   return finalFiles;
+}
+
+/**
+ * Validate that ABI/contractConfig files haven't been improperly modified
+ */
+function validateABIPreservation(
+  originalFiles: { filename: string; content: string }[],
+  fixedFiles: { filename: string; content: string }[]
+): { isValid: boolean; warnings: string[] } {
+  const warnings: string[] = [];
+  const contractConfigPattern = /contractConfig\.ts$/;
+
+  for (const fixedFile of fixedFiles) {
+    // Check if this is a contractConfig file
+    if (contractConfigPattern.test(fixedFile.filename)) {
+      const originalFile = originalFiles.find(f => f.filename === fixedFile.filename);
+
+      if (!originalFile) {
+        continue; // New file, skip validation
+      }
+
+      // Extract ABI from both files
+      const originalABI = extractABIFromContent(originalFile.content);
+      const fixedABI = extractABIFromContent(fixedFile.content);
+
+      if (!originalABI || !fixedABI) {
+        continue; // Can't validate if we can't extract ABIs
+      }
+
+      // Count functions in both ABIs
+      const originalFunctions = originalABI.match(/"name":\s*"[^"]+"/g) || [];
+      const fixedFunctions = fixedABI.match(/"name":\s*"[^"]+"/g) || [];
+
+      // Check if functions were removed
+      if (fixedFunctions.length < originalFunctions.length) {
+        const removed = originalFunctions.length - fixedFunctions.length;
+        warnings.push(
+          `⚠️ ${fixedFile.filename}: ABI was modified! ${removed} function(s) removed (${originalFunctions.length} → ${fixedFunctions.length}). ` +
+          `Stage 4 should NEVER remove ABI functions. Restoring original ABI.`
+        );
+
+        // Restore original ABI
+        fixedFile.content = originalFile.content;
+      }
+
+      // Check if function names changed (excluding Events)
+      const originalFunctionNames = extractFunctionNamesFromABI(originalFile.content);
+      const fixedFunctionNames = extractFunctionNamesFromABI(fixedFile.content);
+
+      const renamedFunctions = originalFunctionNames.filter(name =>
+        !fixedFunctionNames.includes(name)
+      );
+
+      if (renamedFunctions.length > 0) {
+        warnings.push(
+          `⚠️ ${fixedFile.filename}: Function names changed in ABI! Missing: ${renamedFunctions.join(', ')}. ` +
+          `Stage 4 should NEVER rename ABI functions. Restoring original ABI.`
+        );
+
+        // Restore original ABI
+        fixedFile.content = originalFile.content;
+      }
+    }
+  }
+
+  return {
+    isValid: warnings.length === 0,
+    warnings
+  };
+}
+
+/**
+ * Extract ABI array content from contractConfig file
+ */
+function extractABIFromContent(content: string): string | null {
+  const abiMatch = content.match(/export\s+const\s+\w+_ABI\s*=\s*\[([\s\S]*?)\]\s+as\s+const;/);
+  return abiMatch ? abiMatch[1] : null;
+}
+
+/**
+ * Extract function names from ABI (excluding events, errors, constructor)
+ */
+function extractFunctionNamesFromABI(content: string): string[] {
+  const functionNames: string[] = [];
+  const abiContent = extractABIFromContent(content);
+
+  if (!abiContent) {
+    return functionNames;
+  }
+
+  // Match all ABI entries
+  const entries = abiContent.split(/\},\s*\{/);
+
+  for (const entry of entries) {
+    // Check if this is a function (not event, error, or constructor)
+    if (entry.includes('"type":\s*"function"') || entry.includes('"type": "function"')) {
+      const nameMatch = entry.match(/"name":\s*"([^"]+)"/);
+      if (nameMatch) {
+        functionNames.push(nameMatch[1]);
+      }
+    }
+  }
+
+  return functionNames;
 }
 
 /**
@@ -2887,8 +2918,28 @@ CRITICAL REQUIREMENTS:
 - Ensure Solidity contracts compile successfully
 - Follow ESLint rules and best practices
 
+🚨 ABSOLUTELY FORBIDDEN - DO NOT MODIFY:
+- NEVER modify ABI arrays in contractConfig files (src/lib/contractConfig.ts, lib/contractConfig.ts)
+- NEVER remove functions from ABIs - the ABI must remain complete
+- NEVER rename functions in ABIs to match component usage - fix the component instead
+- NEVER "simplify" or "optimize" contract interface files
+- IF errors involve ABI function names: Fix the component to use the correct function name from the ABI
+- IF errors claim a function is missing: The function IS in the ABI, the component has the wrong name
+- CONTRACT INTERFACES ARE SOURCE OF TRUTH - components must match them, not vice versa
+
+⚠️ IMPORT PATH CASE SENSITIVITY - CRITICAL FOR PRODUCTION:
+- ALWAYS use exact case for import paths: '@/components/ui/Button' NOT '@/components/ui/button'
+- Boilerplate components use PascalCase: Button.tsx, Input.tsx, Card.tsx, Select.tsx, Tabs.tsx
+- Development (macOS/Windows) is case-insensitive BUT production (Railway/Linux) is case-sensitive
+- Wrong case = works locally but FAILS in production with "Module not found" error
+- Common mistakes to AVOID: 'button'→'Button', 'input'→'Input', 'card'→'Card', 'select'→'Select'
+- When adding missing imports: Check existing imports in the same file or similar files for correct casing
+- IF error is "Cannot find name 'Button'": Import from '@/components/ui/Button' (capital B)
+
 COMPILATION ERROR TYPES:
 1. TypeScript Errors: Fix type mismatches, missing imports, interface violations, function signatures
+   - For readonly array errors: Use array spreading [...array] to convert to mutable
+   - For ABI function errors: Check the ABI for the correct function name, update the component
 2. Solidity Errors: Fix contract compilation issues, syntax errors, type mismatches
 3. ESLint Errors: Fix code style and best practice violations
 4. Build Errors: Fix Next.js build failures, missing dependencies

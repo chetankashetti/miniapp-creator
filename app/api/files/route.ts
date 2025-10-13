@@ -232,7 +232,10 @@ export async function DELETE(request: NextRequest) {
     }
 
     // Delete from local filesystem
-    const generatedDir = path.join("/tmp/generated", projectId);
+    // Use local generated folder for development, /tmp/generated for production
+    const generatedDir = process.env.NODE_ENV === 'production' 
+      ? path.join("/tmp/generated", projectId)
+      : path.join(process.cwd(), "generated", projectId);
     const localFilePath = path.join(generatedDir, filename);
 
     try {

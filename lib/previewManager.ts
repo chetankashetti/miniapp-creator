@@ -1,11 +1,26 @@
 import fs from "fs-extra";
 import path from "path";
+import {
+  parseContractAddressesFromDeployment,
+  updateFilesWithContractAddresses
+} from "./contractAddressInjector";
 
 // Store active previews for management
 const activePreviews = new Map<string, PreviewResponse>();
 
 // Preview API configuration
 const PREVIEW_API_BASE = process.env.PREVIEW_API_BASE || 'https://minidev.fun';
+
+// Helper functions for path resolution
+function getProjectBaseDir(projectId: string): string {
+  return process.env.NODE_ENV === 'production'
+    ? path.join("/tmp/generated", projectId)
+    : path.join(process.cwd(), "generated", projectId);
+}
+
+function getProjectPatchesDir(projectId: string): string {
+  return path.join(getProjectBaseDir(projectId), "patches");
+}
 
 export interface PreviewResponse {
   url: string;
@@ -16,6 +31,7 @@ export interface PreviewResponse {
   aliasSuccess?: boolean;
   isNewDeployment?: boolean;
   hasPackageChanges?: boolean;
+  contractAddresses?: { [contractName: string]: string }; // Deployed contract addresses
 }
 
 export interface PreviewFile {
@@ -144,6 +160,28 @@ export async function createPreview(
 
       console.log("📦 API Response:", JSON.stringify(apiResponse, null, 2));
 
+      // Parse contract addresses from deployment response
+      const contractAddresses = parseContractAddressesFromDeployment(apiResponse);
+
+      // If contract addresses were deployed, inject them into the files and re-save
+      if (contractAddresses && Object.keys(contractAddresses).length > 0) {
+        console.log(`\n${"=".repeat(60)}`);
+        console.log(`📝 CONTRACT ADDRESSES DETECTED - INJECTING INTO PROJECT`);
+        console.log(`${"=".repeat(60)}`);
+        console.log(`Deployed contracts:`, contractAddresses);
+
+        // Update files with contract addresses
+        const updatedFiles = updateFilesWithContractAddresses(files, contractAddresses);
+
+        // Save updated files to generated directory
+        try {
+          await saveFilesToGenerated(projectId, updatedFiles);
+          console.log(`✅ Updated files saved with contract addresses`);
+        } catch (saveError) {
+          console.error(`⚠️  Failed to save updated files:`, saveError);
+        }
+      }
+
       // Map the API response to our PreviewResponse format
       const previewData: PreviewResponse = {
         url:
@@ -157,6 +195,7 @@ export async function createPreview(
         aliasSuccess: apiResponse.aliasSuccess as boolean,
         isNewDeployment: apiResponse.isNewDeployment as boolean,
         hasPackageChanges: apiResponse.hasPackageChanges as boolean,
+        contractAddresses: contractAddresses || undefined,
       };
 
       // Store the preview info
@@ -257,7 +296,7 @@ export async function saveFilesToGenerated(
   projectId: string,
   files: { filename: string; content: string }[]
 ): Promise<void> {
-  const generatedDir = path.join("/tmp/generated", projectId);
+  const generatedDir = getProjectBaseDir(projectId);
 
   console.log(
     `💾 Saving ${files.length} files to generated directory: ${generatedDir}`
@@ -284,7 +323,7 @@ export async function saveFilesToGenerated(
 
 // List files from generated directory
 export async function listGeneratedFiles(projectId: string): Promise<string[]> {
-  const generatedDir = path.join("/tmp/generated", projectId);
+  const generatedDir = getProjectBaseDir(projectId);
 
   try {
     if (!(await fs.pathExists(generatedDir))) {
@@ -347,7 +386,7 @@ export async function getGeneratedFile(
   projectId: string,
   filePath: string
 ): Promise<string | null> {
-  const generatedDir = path.join("/tmp/generated", projectId);
+  const generatedDir = getProjectBaseDir(projectId);
   const fullPath = path.join(generatedDir, filePath);
 
   try {
@@ -367,7 +406,7 @@ export async function updateGeneratedFile(
   filename: string,
   content: string
 ): Promise<void> {
-  const generatedDir = path.join("/tmp/generated", projectId);
+  const generatedDir = getProjectBaseDir(projectId);
   const filePath = path.join(generatedDir, filename);
 
   try {
@@ -385,7 +424,7 @@ export async function deleteGeneratedFile(
   projectId: string,
   filename: string
 ): Promise<void> {
-  const generatedDir = path.join("/tmp/generated", projectId);
+  const generatedDir = getProjectBaseDir(projectId);
   const filePath = path.join(generatedDir, filename);
 
   try {
@@ -433,7 +472,7 @@ export async function storeDiffs(
   projectId: string,
   diffs: Array<{ filename: string; hunks: unknown[]; unifiedDiff: string }>
 ): Promise<void> {
-  const patchesDir = path.join("/tmp/generated", projectId, "patches");
+  const patchesDir = getProjectPatchesDir(projectId);
   
   try {
     await fs.ensureDir(patchesDir);
@@ -451,7 +490,7 @@ export async function storeDiffs(
 
 // Get stored diffs for rollback
 export async function getStoredDiffs(projectId: string): Promise<Array<{ filename: string; hunks: unknown[]; unifiedDiff: string }>> {
-  const patchesDir = path.join("/tmp/generated", projectId, "patches");
+  const patchesDir = getProjectPatchesDir(projectId);
   
   try {
     if (!(await fs.pathExists(patchesDir))) {

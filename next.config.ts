@@ -9,24 +9,20 @@ const nextConfig: NextConfig = {
     };
     return config;
   },
-  // async headers() {
-  //   return [
-  //     {
-  //       source: "/(.*)",
-  //       headers: [
-  //         {
-  //           key: "X-Frame-Options",
-  //           value: "ALLOWALL",
-  //         },
-  //         {
-  //           key: "Content-Security-Policy",
-  //           value:
-  //             "frame-ancestors *; script-src 'self' 'unsafe-eval' 'unsafe-inline' data: blob:;",
-  //         },
-  //       ],
-  //     },
-  //   ];
-  // },
+  async headers() {
+    return [
+      {
+        source: "/(.*)",
+        headers: [
+          {
+            key: "Content-Security-Policy",
+            value:
+              "default-src 'self'; script-src 'self' 'unsafe-eval' 'unsafe-inline' https://cdn.jsdelivr.net; worker-src 'self' blob:; child-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' https:;",
+          },
+        ],
+      },
+    ];
+  },
 };
 
 export default nextConfig;

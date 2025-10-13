@@ -54,14 +54,21 @@ function HomeContent() {
       const generatedProject: GeneratedProject = {
         projectId: projectData.id,
         port: 3000, // Default port
-        url: projectData.previewUrl || projectData.vercelUrl || `https://${projectData.id}.minidev.fun`,
+        url: projectData.vercelUrl || projectData.previewUrl || '',
         generatedFiles: (projectData.files as { filename: string }[])?.map((f: { filename: string }) => f.filename) || [],
         previewUrl: projectData.previewUrl,
         vercelUrl: projectData.vercelUrl,
-        aliasSuccess: true,
+        aliasSuccess: !!(projectData.vercelUrl || projectData.previewUrl),
         isNewDeployment: false,
         hasPackageChanges: false,
       };
+
+      console.log('🔍 Generated project loaded:', {
+        projectId: generatedProject.projectId,
+        vercelUrl: generatedProject.vercelUrl,
+        previewUrl: generatedProject.previewUrl,
+        url: generatedProject.url,
+      });
 
       setCurrentProject(generatedProject);
     } catch (error) {
@@ -89,8 +96,8 @@ function HomeContent() {
 
       {/* Right Section - Code/Preview */}
       <section className="w-2/3 h-[calc(100vh-40px)] bg-white transition-all duration-500 rounded-tr-[56px] rounded-br-[56px] dot-bg">
-        <CodeGenerator 
-          currentProject={currentProject} 
+        <CodeGenerator
+          currentProject={currentProject}
           isGenerating={isGenerating}
           onProjectSelect={handleProjectSelect}
           onNewProject={handleNewProject}

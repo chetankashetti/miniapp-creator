@@ -43,34 +43,24 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
     const chatContainerRef = useRef<HTMLDivElement>(null);
     const { sessionToken } = useAuthContext();
 
+    // Timeout ref for cleanup to prevent duplicate calls
+    const generationTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-    // Chat session state
-    const [chatSessionId, setChatSessionId] = useState<string>('');
+
+    // Chat session state - persist chatSessionId in sessionStorage to survive re-mounts
+    const [chatSessionId] = useState<string>(() => {
+        try {
+            const stored = sessionStorage.getItem('minidev_chat_session_id');
+            if (stored) return stored;
+            const newId = crypto.randomUUID();
+            sessionStorage.setItem('minidev_chat_session_id', newId);
+            return newId;
+        } catch {
+            return crypto.randomUUID();
+        }
+    });
     const [chatProjectId, setChatProjectId] = useState<string>(''); // Track the actual project ID where chat messages are stored
     const [currentPhase, setCurrentPhase] = useState<'requirements' | 'building' | 'editing'>('requirements');
-    
-    // Persistent generation flag using sessionStorage to prevent duplicates across re-mounts
-    const getGenerationFlag = () => {
-        try {
-            return sessionStorage.getItem(`generation_triggered_${chatSessionId}`) === 'true';
-        } catch {
-            return false;
-        }
-    };
-    
-    const setGenerationFlag = (value: boolean) => {
-        try {
-            if (value) {
-                sessionStorage.setItem(`generation_triggered_${chatSessionId}`, 'true');
-            } else {
-                sessionStorage.removeItem(`generation_triggered_${chatSessionId}`);
-            }
-        } catch {
-            // Ignore localStorage errors
-        }
-    };
-    
-    const [hasTriggeredGeneration, setHasTriggeredGeneration] = useState(() => getGenerationFlag());
 
     // Function to scroll to bottom of chat
     const scrollToBottom = () => {
@@ -79,30 +69,16 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
         }
     };
 
-    // Initialize chat session
-    useEffect(() => {
-        if (!chatSessionId) {
-            const newSessionId = crypto.randomUUID();
-            setChatSessionId(newSessionId);
-            // Clean up any old generation flags for this new session
-            try {
-                sessionStorage.removeItem(`generation_triggered_${newSessionId}`);
-            } catch {
-                // Ignore errors
-            }
-        }
-    }, [chatSessionId]);
-
     // Load chat messages when project changes
     useEffect(() => {
         const loadChatMessages = async () => {
-            console.log('🔍 ChatInterface useEffect triggered:', { 
-                currentProject: currentProject?.projectId, 
+            console.log('🔍 ChatInterface useEffect triggered:', {
+                currentProject: currentProject?.projectId,
                 sessionToken: !!sessionToken,
                 currentPhase,
                 timestamp: new Date().toISOString()
             });
-            
+
             if (currentProject?.projectId && sessionToken) {
                 // Set phase to 'editing' when an existing project is loaded
                 if (currentPhase !== 'editing') {
@@ -111,7 +87,7 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
                 } else {
                     console.log('🔍 Phase already set to editing, skipping');
                 }
-                
+
                 try {
                     // Use the main chat API to get messages for this project
                     const response = await fetch(`/api/chat?projectId=${currentProject.projectId}`, {
@@ -134,11 +110,13 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
                 } catch (error) {
                     console.warn('Failed to load chat messages:', error);
                 }
-            } else if (!currentProject) {
-                // Reset phase to 'requirements' when no project is selected
+            } else if (!currentProject && currentPhase === 'editing') {
+                // Only reset phase if we're in editing mode and project is cleared
+                // Don't reset during building phase to avoid interrupting generation
+                console.log('🔄 Project cleared, resetting phase to requirements');
                 setCurrentPhase('requirements');
             }
-            
+
             // Add welcome message when no project or no messages
             if (chat.length === 0 && !aiLoading) {
                 setChat([{
@@ -151,7 +129,8 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
         };
 
         loadChatMessages();
-    }, [currentProject, sessionToken, currentPhase]); // Removed chat.length and aiLoading to prevent duplicate triggers
+        // REMOVED currentPhase from dependencies to prevent reset loop during generation
+    }, [currentProject, sessionToken, chat.length, aiLoading, currentPhase]);
 
     // Show warning message once when user hasn't started chatting
     useEffect(() => {
@@ -182,6 +161,18 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
         console.log('🔄 onGeneratingChange called with isGenerating:', isGenerating);
         onGeneratingChange(isGenerating);
     }, [isGenerating, onGeneratingChange]);
+
+
+    // Cleanup timeout on unmount to prevent memory leaks and duplicate calls
+    useEffect(() => {
+        return () => {
+            if (generationTimeoutRef.current) {
+                console.log('🧹 Cleaning up generation timeout on unmount');
+                clearTimeout(generationTimeoutRef.current);
+                generationTimeoutRef.current = null;
+            }
+        };
+    }, []);
 
     const handleSendMessage = async (userMessage: string) => {
         if (!chatSessionId || !sessionToken) return;
@@ -331,8 +322,8 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
             // AI message will be saved to database by the chat API
 
             // Check if we should transition to building phase
-            // Only allow generation in requirements phase and if generation hasn't been triggered yet
-            if (currentPhase === 'requirements' && !hasTriggeredGeneration && !isGenerating) {
+            // Only allow generation in requirements phase
+            if (currentPhase === 'requirements' && !isGenerating) {
                 const aiResponseLower = aiResponse.toLowerCase();
                 const isConfirmedByText = aiResponseLower.includes('proceed to build') ||
                     aiResponseLower.includes('building your miniapp') ||
@@ -343,34 +334,42 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
                 const isConfirmedByAPI = data.projectConfirmed === true;
 
                 if (isConfirmedByText || isConfirmedByAPI) {
-                    console.log('✅ Project confirmation detected! Transitioning to building phase...');
+                    console.log('✅ Project confirmation detected! Transitioning to building phase...', {
+                        isConfirmedByText,
+                        isConfirmedByAPI,
+                        isGenerating,
+                        existingTimeout: !!generationTimeoutRef.current
+                    });
                     setCurrentPhase('building');
-                    // Note: hasTriggeredGeneration flag will be set in handleGenerateProject to prevent duplicates
 
                     // Use the AI's analysis as the final prompt
                     const finalPrompt = aiResponse;
 
                     console.log('🚀 Triggering project generation with AI analysis:', finalPrompt.substring(0, 200) + '...');
-                    setTimeout(() => {
+
+                    // Clear any existing timeout before scheduling a new one to prevent duplicates
+                    if (generationTimeoutRef.current) {
+                        clearTimeout(generationTimeoutRef.current);
+                        console.log('🧹 Cleared existing generation timeout to prevent duplicates');
+                    }
+
+                    // Store timeout reference for cleanup
+                    generationTimeoutRef.current = setTimeout(() => {
+                        console.log('⏰ Timeout fired, calling handleGenerateProject');
                         handleGenerateProject(aiResponse);
+                        generationTimeoutRef.current = null; // Clear ref after execution
                     }, 1000);
+                    console.log('⏰ Generation timeout scheduled for 1 second');
                 }
             } else {
                 // Log why generation is not allowed
                 const phase = currentPhase as 'requirements' | 'building' | 'editing';
                 if (phase === 'editing') {
                     console.log('📝 In editing phase - generation not allowed, only file modifications');
-                } else if (phase === 'building' && hasTriggeredGeneration) {
-                    console.log('⚠️ Generation already triggered - preventing duplicate generation');
-                } else if (hasTriggeredGeneration) {
-                    console.log('⚠️ Generation already triggered - preventing duplicate generation');
                 }
             }
         } catch (err) {
             console.error('Error:', err);
-            // Reset generation flag on error to allow retry
-            setHasTriggeredGeneration(false);
-            setGenerationFlag(false);
             // setError(err instanceof Error ? err.message : 'An error occurred');
             setChat(prev => [
                 ...prev,
@@ -387,41 +386,197 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
         }
     };
 
+    // Polling function for async job status
+    const pollJobStatus = async (jobId: string): Promise<GeneratedProject> => {
+        const maxAttempts = 80; // Poll for up to ~20 minutes (80 * 15 seconds)
+        let attempt = 0;
+
+        console.log(`🔄 Starting to poll job ${jobId}...`);
+
+        return new Promise((resolve, reject) => {
+            const pollInterval = setInterval(async () => {
+                attempt++;
+
+                try {
+                    console.log(`🔄 Polling job ${jobId} (attempt ${attempt}/${maxAttempts})...`);
+
+                    const response = await fetch(`/api/jobs/${jobId}`, {
+                        headers: {
+                            'Authorization': `Bearer ${sessionToken}`,
+                        },
+                    });
+
+                    if (!response.ok) {
+                        clearInterval(pollInterval);
+                        reject(new Error(`Failed to fetch job status: ${response.status}`));
+                        return;
+                    }
+
+                    const job = await response.json();
+                    console.log(`📊 Job status:`, job.status);
+
+                    if (job.status === 'completed') {
+                        clearInterval(pollInterval);
+                        console.log('✅ Job completed successfully!', job.result);
+
+                        // Transform job result to GeneratedProject format
+                        const project: GeneratedProject = {
+                            projectId: job.result.projectId,
+                            port: job.result.port,
+                            url: job.result.url,
+                            generatedFiles: job.result.generatedFiles,
+                            previewUrl: job.result.previewUrl,
+                            vercelUrl: job.result.vercelUrl,
+                        };
+
+                        resolve(project);
+                    } else if (job.status === 'failed') {
+                        clearInterval(pollInterval);
+                        reject(new Error(job.error || 'Job failed'));
+                    } else if (attempt >= maxAttempts) {
+                        clearInterval(pollInterval);
+                        reject(new Error('Job polling timeout - generation is taking too long'));
+                    }
+                    // Otherwise, job is still pending or processing, continue polling
+                } catch (error) {
+                    console.error('❌ Error polling job:', error);
+                    clearInterval(pollInterval);
+                    reject(error);
+                }
+            }, 15000); // Poll every 15 seconds
+        });
+    };
+
     const handleGenerateProject = async (generationPrompt: string) => {
         console.log('🔍 handleGenerateProject called:', {
             hasPrompt: !!generationPrompt.trim(),
             hasSessionToken: !!sessionToken,
             isGenerating,
-            hasTriggeredGeneration,
-            currentPhase
+            currentPhase,
+            timestamp: new Date().toISOString()
         });
-        
-        if (!generationPrompt.trim() || !sessionToken || isGenerating || hasTriggeredGeneration) {
-            // setError('Please enter a prompt');
-            console.log('⚠️ Skipping project generation: invalid prompt, no session token, already generating, or generation already triggered');
+
+        // Check if generation should proceed
+        if (!generationPrompt.trim() || !sessionToken || isGenerating) {
+            console.log('⚠️ Skipping project generation:', {
+                reason: !generationPrompt.trim() ? 'no prompt' :
+                        !sessionToken ? 'no session token' :
+                        isGenerating ? 'already generating' : 'unknown'
+            });
             return;
         }
+
         console.log('🚀 Starting project generation...');
         setIsGenerating(true);
+
         // setError(null);
         try {
-            console.log('🚀 Starting generation with prompt:', generationPrompt.substring(0, 200) + '...');
+            console.log('🚀 Generating project with prompt:', generationPrompt.substring(0, 200) + '...');
 
-            // Mark generation as triggered immediately to prevent duplicates
-            setHasTriggeredGeneration(true);
-            setGenerationFlag(true);
+            // Check if async processing is enabled
+            const useAsyncProcessing = window.localStorage.getItem('minidev_use_async_processing') === 'true' ||
+                                       process.env.NEXT_PUBLIC_USE_ASYNC_PROCESSING === 'true';
 
-            // No timeout - let it run as long as needed
-            // Client-side flags prevent duplicates (isGenerating, hasTriggeredGeneration)
+            // TEST MODE: Add this header to enable quick 30-second return for debugging
+            const testQuickReturn = window.localStorage.getItem('minidev_test_quick_return') === 'true';
+            if (testQuickReturn) {
+                console.log('🧪 TEST MODE ENABLED: API will return after 30 seconds');
+            }
+
             const response = await fetch('/api/generate', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${sessionToken}`
+                    'Authorization': `Bearer ${sessionToken}`,
+                    ...(testQuickReturn && { 'X-Test-Quick-Return': 'true' }),
+                    ...(useAsyncProcessing && { 'X-Use-Async-Processing': 'true' })
                 },
-                body: JSON.stringify({ prompt: generationPrompt }),
+                body: JSON.stringify({
+                    prompt: generationPrompt,
+                    projectId: chatProjectId || undefined  // Pass existing project ID for chat preservation
+                }),
             });
 
+            console.log('📤 Sent /api/generate request with:', {
+                hasChatProjectId: !!chatProjectId,
+                chatProjectId,
+                useAsyncProcessing
+            });
+
+            // Handle async processing response (202 Accepted)
+            if (response.status === 202 && useAsyncProcessing) {
+                const jobData = await response.json();
+                console.log('🔄 Async job created:', jobData.jobId);
+
+                // Add a message about async processing
+                setChat(prev => [
+                    ...prev,
+                    {
+                        role: 'ai',
+                        content: `⏳ Your miniapp generation has started! This will take about ${jobData.estimatedTime || '5-10 minutes'}. I'll let you know when it's ready.`,
+                        phase: 'building',
+                        timestamp: Date.now()
+                    }
+                ]);
+
+                // Start polling for job completion
+                let project;
+                try {
+                    project = await pollJobStatus(jobData.jobId);
+                } catch (pollError) {
+                    console.error('❌ Async job failed:', pollError);
+                    throw pollError; // Re-throw to be caught by outer catch block
+                }
+
+                // Project is now ready, continue with normal flow
+                console.log('📦 Project generated successfully via async processing:', {
+                    projectId: project.projectId,
+                });
+
+                // Rest of the success handling is below in the common code path
+                console.log('✅ Generation complete, updating UI state...');
+                onProjectGenerated(project);
+                console.log('✅ Project state updated via onProjectGenerated');
+                setCurrentPhase('editing');
+                console.log('✅ Phase set to editing');
+
+                // Add generation success message to chat
+                const aiMessage = project.generatedFiles && project.generatedFiles.length > 0
+                    ? `🎉 Your miniapp has been created! I've generated ${project.generatedFiles.length} files and your app is now running. You can preview it on the right and continue chatting with me to make changes.`
+                    : '🎉 Your miniapp has been created! The preview should be available shortly. You can continue chatting with me to make changes.';
+
+                const successMsg: ChatMessage = {
+                    role: 'ai',
+                    content: aiMessage,
+                    changedFiles: project.generatedFiles || [],
+                    phase: 'editing',
+                    timestamp: Date.now()
+                };
+
+                setChat(prev => [...prev, successMsg]);
+
+                // Save success message to database
+                if (project.projectId) {
+                    try {
+                        await fetch(`/api/projects/${project.projectId}/chat`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${sessionToken}` },
+                            body: JSON.stringify({
+                                role: 'ai',
+                                content: aiMessage,
+                                phase: 'editing',
+                                changedFiles: project.generatedFiles || []
+                            })
+                        });
+                    } catch (error) {
+                        console.warn('Failed to save success message to database:', error);
+                    }
+                }
+
+                return; // Exit early for async flow
+            }
+
+            // Handle synchronous response (200 OK)
             if (!response.ok) {
                 const errorData = await response.json();
                 const errorMessage = errorData.details || errorData.error || 'Failed to generate project';
@@ -429,43 +584,20 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
                 throw new Error(errorMessage);
             }
             const project = await response.json();
-            
-            // Migrate chat messages from draft project to the new project
-            if (project.projectId && chatProjectId) {
-                try {
-                    console.log(`🔄 Migrating chat messages from ${chatProjectId} to ${project.projectId}`);
-                    const migrateResponse = await fetch('/api/chat', {
-                        method: 'PUT',
-                        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${sessionToken}` },
-                        body: JSON.stringify({ 
-                            fromProjectId: chatProjectId, 
-                            toProjectId: project.projectId 
-                        }),
-                    });
-                    
-                    if (migrateResponse.ok) {
-                        const migrateData = await migrateResponse.json();
-                        console.log(`✅ Chat messages migrated successfully: ${migrateData.migratedCount} messages`);
-                    } else {
-                        console.warn('⚠️ Failed to migrate chat messages:', await migrateResponse.text());
-                    }
-                } catch (error) {
-                    console.warn('⚠️ Error migrating chat messages:', error);
-                }
-            } else {
-                console.log('⚠️ Cannot migrate chat messages - missing project IDs:', { 
-                    newProjectId: project.projectId, 
-                    chatProjectId 
-                });
-            }
-            
+
+            console.log('📦 Project generated successfully:', {
+                projectId: project.projectId,
+                chatProjectIdMatches: project.projectId === chatProjectId
+            });
+
+            // Chat messages are already in the right place! No migration needed
+            // because /api/chat created the project first and saved messages there
+
+            console.log('✅ Generation complete, updating UI state...');
             onProjectGenerated(project);
+            console.log('✅ Project state updated via onProjectGenerated');
             setCurrentPhase('editing');
-            
-            // Keep generation flag set to prevent duplicate generations
-            // Once a project is generated, we should not allow further generation
-            // setHasTriggeredGeneration(false);
-            // setGenerationFlag(false);
+            console.log('✅ Phase set to editing');
 
             // Add generation success message to chat
             const aiMessage = project.generatedFiles && project.generatedFiles.length > 0
@@ -513,13 +645,8 @@ export function ChatInterface({ currentProject, onProjectGenerated, onGenerating
                     timestamp: Date.now()
                 }
             ]);
-
-            // Reset flags to allow retry
-            setHasTriggeredGeneration(false);
-            setGenerationFlag(false);
         } finally {
             setIsGenerating(false);
-            // Don't reset generation flags here - handle in catch block based on error type
         }
     };
 

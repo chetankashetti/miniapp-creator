@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import fs from "fs-extra";
 import path from "path";
 import { v4 as uuidv4 } from "uuid";
-import { createProject, saveProjectFiles, savePatch, getUserById, createUser, getProjectById } from "../../../lib/database";
+import { createProject, saveProjectFiles, savePatch, getUserById, getUserByPrivyId, createUser, getProjectById, getProjectFiles } from "../../../lib/database";
 import { authenticateRequest } from "../../../lib/auth";
 import { logger, logApiRequest, logErrorWithContext } from "../../../lib/logger";
 import {
@@ -455,9 +455,149 @@ function generateProjectName(intentSpec: { feature: string; reason?: string }): 
 export async function POST(request: NextRequest) {
   const requestId = uuidv4();
   const startTime = Date.now();
-  
+
   try {
     logApiRequest('POST', '/api/generate', { requestId, startTime });
+
+    // TEST MODE: Quick return for debugging duplicate calls
+    const testMode = request.headers.get("X-Test-Quick-Return") === "true";
+    if (testMode) {
+      console.log(`🧪 TEST MODE: Request ${requestId} - Returning after 30 seconds`);
+      await new Promise(resolve => setTimeout(resolve, 30000)); // Wait 30 seconds
+
+      return NextResponse.json({
+        projectId: uuidv4(),
+        url: "https://test-mode.example.com",
+        port: 3000,
+        success: true,
+        generatedFiles: ["test.ts"],
+        pipeline: "test-mode",
+        changesApplied: true,
+        reason: "Test mode - quick return",
+        totalFiles: 1,
+        testMode: true,
+        requestId
+      });
+    }
+
+    // ASYNC MODE: Return immediately with job ID (recommended for production)
+    const useAsyncProcessing = request.headers.get("X-Use-Async-Processing") === "true" ||
+                                process.env.USE_ASYNC_PROCESSING === "true";
+
+    if (useAsyncProcessing) {
+      console.log(`🔄 ASYNC MODE: Creating job and returning immediately`);
+
+      // Import async dependencies
+      const { createGenerationJob } = await import("../../../lib/database");
+
+      // Authenticate the request
+      const bypassAuth = request.headers.get("X-Bypass-Auth") === "true";
+      const testUserId = request.headers.get("X-Test-User-Id");
+
+      let user;
+      let isAuthorized;
+
+      if (bypassAuth && testUserId) {
+        logger.warn("AUTH BYPASS ENABLED FOR TESTING", { requestId, testUserId });
+
+        // For testing: Ensure test user exists in database before creating job
+        // (generation_jobs table has foreign key constraint on user_id)
+        try {
+          let dbUser = await getUserByPrivyId(testUserId);
+          if (!dbUser) {
+            logger.info("Creating test user in database", { requestId, testUserId });
+            dbUser = await createUser(
+              testUserId, // Use UUID as privyUserId
+              "test@example.com",
+              "Test User",
+              undefined
+            );
+            logger.info("Test user created", { requestId, userId: dbUser.id });
+          }
+
+          user = {
+            id: dbUser.id,
+            privyUserId: dbUser.privyUserId,
+            email: dbUser.email ?? "test@example.com",
+            displayName: dbUser.displayName ?? "Test User",
+          };
+        } catch (dbError) {
+          logger.error("Failed to create/get test user", { requestId, error: dbError });
+          throw new Error(`Failed to create test user: ${dbError instanceof Error ? dbError.message : String(dbError)}`);
+        }
+
+        isAuthorized = true;
+      } else {
+        const authResult = await authenticateRequest(request);
+        user = authResult.user;
+        isAuthorized = authResult.isAuthorized;
+
+        if (!isAuthorized || !user) {
+          return NextResponse.json(
+            { error: authResult.error || "Authentication required" },
+            { status: 401 }
+          );
+        }
+      }
+
+      const { prompt, useMultiStage = true, projectId: existingProjectId } = await request.json();
+
+      if (!prompt) {
+        return NextResponse.json({ error: "Missing prompt" }, { status: 400 });
+      }
+
+      console.log(`📝 Creating generation job for user: ${user.email || user.id}`);
+      console.log(`📋 Prompt: ${prompt.substring(0, 100)}...`);
+
+      // Create job in database
+      const job = await createGenerationJob(
+        user.id,
+        prompt,
+        {
+          prompt,
+          existingProjectId,
+          useMultiStage,
+        },
+        existingProjectId
+      );
+
+      console.log(`✅ Job created with ID: ${job.id}`);
+
+      // Trigger background processing asynchronously
+      // Note: This uses fetch to call the worker endpoint without waiting
+      const workerToken = process.env.WORKER_AUTH_TOKEN || 'dev-worker-token';
+      const workerUrl = process.env.WORKER_URL || `${request.nextUrl.origin}/api/jobs/process`;
+
+      console.log(`🔧 Triggering background worker at: ${workerUrl}`);
+
+      // Fire and forget - don't await this
+      fetch(workerUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${workerToken}`,
+        },
+        body: JSON.stringify({ jobId: job.id }),
+      }).catch(error => {
+        console.error('⚠️ Failed to trigger background worker:', error);
+        // Job will be picked up by scheduled worker polling
+      });
+
+      // Return immediately with 202 Accepted and job ID
+      return NextResponse.json({
+        accepted: true,
+        jobId: job.id,
+        status: 'pending',
+        message: 'Generation job created and processing started',
+        pollUrl: `/api/jobs/${job.id}`,
+        estimatedTime: '5-10 minutes',
+      }, {
+        status: 202, // 202 Accepted
+        headers: {
+          'Location': `/api/jobs/${job.id}`,
+        },
+      });
+    }
     
     // Check for auth bypass (testing only)
     const bypassAuth = request.headers.get("X-Bypass-Auth") === "true";
@@ -514,7 +654,7 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const { prompt, useMultiStage = true } = await request.json();
+    const { prompt, useMultiStage = true, projectId: existingProjectId } = await request.json();
     const accessToken = process.env.PREVIEW_AUTH_TOKEN;
     console.log("🔑 Preview auth token:", accessToken);
     if (!accessToken) {
@@ -556,15 +696,23 @@ export async function POST(request: NextRequest) {
       console.log(`📋 Full Prompt: ${prompt.substring(0, 200)}...`);
     }
 
-    // Generate unique project ID
-    const projectId = uuidv4();
+    // Use existing project ID if provided (for chat preservation), otherwise generate new one
+    const projectId = existingProjectId || uuidv4();
+
+    if (existingProjectId) {
+      console.log(`📦 Using existing project ID from chat: ${existingProjectId}`);
+    } else {
+      console.log(`🆕 Generated new project ID: ${projectId}`);
+    }
     
-    // Use /tmp directory for Vercel serverless environment
-    const outputDir = '/tmp/generated';
+    // Use local generated folder for development, /tmp/generated for production
+    const outputDir = process.env.NODE_ENV === 'production' 
+      ? '/tmp/generated' 
+      : path.join(process.cwd(), 'generated');
     const userDir = path.join(outputDir, projectId);
     const boilerplateDir = path.join(outputDir, `${projectId}-boilerplate`);
     
-    // Ensure /tmp/generated directory exists
+    // Ensure output directory exists
     fs.mkdirSync(outputDir, { recursive: true });
 
     console.log(`📁 Project ID: ${projectId}`);
@@ -832,12 +980,12 @@ export async function POST(request: NextRequest) {
   } catch (err) {
     const duration = Date.now() - startTime;
     logErrorWithContext(err as Error, 'Project generation request', requestId);
-    logger.error("Project generation failed", { 
-      requestId, 
-      duration, 
-      error: err instanceof Error ? err.message : String(err) 
+    logger.error("Project generation failed", {
+      requestId,
+      duration,
+      error: err instanceof Error ? err.message : String(err)
     });
-    
+
     return NextResponse.json(
       {
         error: "Failed to generate project",
@@ -940,15 +1088,62 @@ export async function PATCH(request: NextRequest) {
       );
     }
 
-    // Use /tmp directory for Vercel serverless environment
-    const outputDir = '/tmp/generated';
+    // Use local generated folder for development, /tmp/generated for production
+    const outputDir = process.env.NODE_ENV === 'production'
+      ? '/tmp/generated'
+      : path.join(process.cwd(), 'generated');
     const userDir = path.join(outputDir, projectId);
-    
-    // Ensure /tmp/generated directory exists
+
+    // Ensure output directory exists
     fs.mkdirSync(outputDir, { recursive: true });
 
-    // Read all files in the project (excluding node_modules, .next, etc.)
-    const currentFiles = await readAllFiles(userDir);
+    // Try to read files from disk first, fall back to database if directory doesn't exist
+    let currentFiles: { filename: string; content: string }[] = [];
+
+    try {
+      // Check if the directory exists
+      if (await fs.pathExists(userDir)) {
+        console.log(`📁 Reading files from disk: ${userDir}`);
+        currentFiles = await readAllFiles(userDir);
+      } else {
+        console.log(`💾 Directory not found on disk, fetching from database for project: ${projectId}`);
+        // Fetch files from database
+        const dbFiles = await getProjectFiles(projectId);
+        currentFiles = dbFiles.map(f => ({
+          filename: f.filename,
+          content: f.content
+        }));
+
+        if (currentFiles.length > 0) {
+          console.log(`✅ Loaded ${currentFiles.length} files from database`);
+          // Recreate the directory structure on disk for processing
+          console.log(`📁 Recreating project directory: ${userDir}`);
+          await writeFilesToDir(userDir, currentFiles);
+          console.log(`✅ Project files restored to disk`);
+        }
+      }
+    } catch (error) {
+      console.error(`❌ Error reading project files:`, error);
+      // Try database as final fallback
+      try {
+        console.log(`💾 Attempting database fallback for project: ${projectId}`);
+        const dbFiles = await getProjectFiles(projectId);
+        currentFiles = dbFiles.map(f => ({
+          filename: f.filename,
+          content: f.content
+        }));
+
+        if (currentFiles.length > 0) {
+          console.log(`✅ Loaded ${currentFiles.length} files from database (fallback)`);
+          // Recreate the directory structure on disk for processing
+          await writeFilesToDir(userDir, currentFiles);
+          console.log(`✅ Project files restored to disk (fallback)`);
+        }
+      } catch (dbError) {
+        console.error(`❌ Database fallback also failed:`, dbError);
+        throw error; // Re-throw the original error
+      }
+    }
 
     if (currentFiles.length === 0) {
       return NextResponse.json(

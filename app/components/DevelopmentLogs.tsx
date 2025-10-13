@@ -20,8 +20,8 @@ const BUILDING_STAGES = [
 
 const TIPS = [
     {
-        title: "This might take a while",
-        message: "This process takes 5-6 minutes. Feel free to grab a coffee or come back later. We'll keep working on your project in the background!"
+        title: "Setting things up",
+        message: "We're preparing your project environment and analyzing your requirements using AI."
     },
     {
         title: "Did you know?",
@@ -34,14 +34,6 @@ const TIPS = [
     {
         title: "Behind the scenes",
         message: "We're setting up your entire tech stack including Next.js, TypeScript, and blockchain integrations automatically."
-    },
-    {
-        title: "Quality assurance",
-        message: "Every generated project includes error handling, responsive design, and best practices out of the box."
-    },
-    {
-        title: "Almost there!",
-        message: "Your project will be deployed and ready to preview in your browser as soon as generation completes."
     }
 ];
 
@@ -51,8 +43,9 @@ export function DevelopmentLogs({ onComplete }: DevelopmentLogsProps) {
     const [currentTipIndex, setCurrentTipIndex] = useState(0);
 
     useEffect(() => {
-        // Simulate generation time - 12 minutes to be safer than actual generation timeout
-        const totalTime = 12 * 60 * 1000; // 12 minutes in milliseconds
+        // Loading screen for 10 minutes - let actual generation happen in background
+        // This prevents browser TCP timeout issues and provides better UX
+        const totalTime = 10 * 60 * 1000; // 10 minutes - enough time to show project generation progress
         let currentTime = 0;
 
         const progressTimer = setInterval(() => {
@@ -61,12 +54,12 @@ export function DevelopmentLogs({ onComplete }: DevelopmentLogsProps) {
             setProgress(newProgress >= 100 ? 100 : newProgress);
         }, 100);
 
-        // Stage progression based on cumulative durations
-        const stageDurations = BUILDING_STAGES.map(stage => stage.duration * 1000);
+        // Show stages gradually during the 10 minute window
+        const quickStageDurations = [60000, 70000, 80000, 90000, 70000, 60000, 50000, 40000, 80000]; // Total: 600 seconds (10 minutes)
         const stageTimeouts: NodeJS.Timeout[] = [];
 
         let cumulativeTime = 0;
-        stageDurations.forEach((duration, index) => {
+        quickStageDurations.forEach((duration, index) => {
             cumulativeTime += duration;
             const timeout = setTimeout(() => {
                 setCurrentStage(index + 1);
@@ -74,16 +67,16 @@ export function DevelopmentLogs({ onComplete }: DevelopmentLogsProps) {
             stageTimeouts.push(timeout);
         });
 
-        // Rotate tips every 15 seconds
+        // Rotate tips every 30 seconds (better pacing for longer animation)
         const tipRotation = setInterval(() => {
             setCurrentTipIndex((prev) => (prev + 1) % TIPS.length);
-        }, 15000);
+        }, 30000);
 
         const completionTimer = setTimeout(() => {
             clearInterval(progressTimer);
             clearInterval(tipRotation);
             stageTimeouts.forEach(clearTimeout);
-            onComplete();
+            onComplete(); // Hide loading, show preview - actual generation continues in background
         }, totalTime);
 
         return () => {
