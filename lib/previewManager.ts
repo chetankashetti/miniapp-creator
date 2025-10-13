@@ -11,6 +11,17 @@ const activePreviews = new Map<string, PreviewResponse>();
 // Preview API configuration
 const PREVIEW_API_BASE = process.env.PREVIEW_API_BASE || 'https://minidev.fun';
 
+// Helper functions for path resolution
+function getProjectBaseDir(projectId: string): string {
+  return process.env.NODE_ENV === 'production'
+    ? path.join("/tmp/generated", projectId)
+    : path.join(process.cwd(), "generated", projectId);
+}
+
+function getProjectPatchesDir(projectId: string): string {
+  return path.join(getProjectBaseDir(projectId), "patches");
+}
+
 export interface PreviewResponse {
   url: string;
   status: string;
@@ -285,7 +296,7 @@ export async function saveFilesToGenerated(
   projectId: string,
   files: { filename: string; content: string }[]
 ): Promise<void> {
-  const generatedDir = path.join("/tmp/generated", projectId);
+  const generatedDir = getProjectBaseDir(projectId);
 
   console.log(
     `💾 Saving ${files.length} files to generated directory: ${generatedDir}`
@@ -312,7 +323,7 @@ export async function saveFilesToGenerated(
 
 // List files from generated directory
 export async function listGeneratedFiles(projectId: string): Promise<string[]> {
-  const generatedDir = path.join("/tmp/generated", projectId);
+  const generatedDir = getProjectBaseDir(projectId);
 
   try {
     if (!(await fs.pathExists(generatedDir))) {
@@ -375,7 +386,7 @@ export async function getGeneratedFile(
   projectId: string,
   filePath: string
 ): Promise<string | null> {
-  const generatedDir = path.join("/tmp/generated", projectId);
+  const generatedDir = getProjectBaseDir(projectId);
   const fullPath = path.join(generatedDir, filePath);
 
   try {
@@ -395,7 +406,7 @@ export async function updateGeneratedFile(
   filename: string,
   content: string
 ): Promise<void> {
-  const generatedDir = path.join("/tmp/generated", projectId);
+  const generatedDir = getProjectBaseDir(projectId);
   const filePath = path.join(generatedDir, filename);
 
   try {
@@ -413,7 +424,7 @@ export async function deleteGeneratedFile(
   projectId: string,
   filename: string
 ): Promise<void> {
-  const generatedDir = path.join("/tmp/generated", projectId);
+  const generatedDir = getProjectBaseDir(projectId);
   const filePath = path.join(generatedDir, filename);
 
   try {
@@ -461,7 +472,7 @@ export async function storeDiffs(
   projectId: string,
   diffs: Array<{ filename: string; hunks: unknown[]; unifiedDiff: string }>
 ): Promise<void> {
-  const patchesDir = path.join("/tmp/generated", projectId, "patches");
+  const patchesDir = getProjectPatchesDir(projectId);
   
   try {
     await fs.ensureDir(patchesDir);
@@ -479,7 +490,7 @@ export async function storeDiffs(
 
 // Get stored diffs for rollback
 export async function getStoredDiffs(projectId: string): Promise<Array<{ filename: string; hunks: unknown[]; unifiedDiff: string }>> {
-  const patchesDir = path.join("/tmp/generated", projectId, "patches");
+  const patchesDir = getProjectPatchesDir(projectId);
   
   try {
     if (!(await fs.pathExists(patchesDir))) {
