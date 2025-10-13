@@ -25,8 +25,10 @@ import {
   saveFilesToGenerated,
   getPreviewUrl,
   updatePreviewFiles,
+  deployContractsFirst,
 } from "./previewManager";
 import { STAGE_MODEL_CONFIG, ANTHROPIC_MODELS } from "./llmOptimizer";
+import { updateFilesWithContractAddresses } from "./contractAddressInjector";
 
 const PREVIEW_API_BASE = process.env.PREVIEW_API_BASE || 'https://minidev.fun';
 
@@ -584,17 +586,66 @@ async function executeInitialGenerationJob(
     await saveFilesToGenerated(projectId, generatedFiles);
     console.log("✅ Files written successfully");
 
-    // Create preview
+    // NEW: Deploy contracts FIRST for Web3 projects (before creating preview)
+    let contractAddresses: { [key: string]: string } | undefined;
+
+    if (enhancedResult.intentSpec?.isWeb3) {
+      console.log("\n" + "=".repeat(70));
+      console.log("🔗 WEB3 PROJECT DETECTED - DEPLOYING CONTRACTS FIRST");
+      console.log("=".repeat(70) + "\n");
+
+      try {
+        // Deploy contracts and get real addresses
+        contractAddresses = await deployContractsFirst(
+          projectId,
+          generatedFiles,
+          accessToken
+        );
+
+        console.log("✅ Contracts deployed successfully!");
+        console.log("📝 Contract addresses:", JSON.stringify(contractAddresses, null, 2));
+
+        // Inject real contract addresses into files BEFORE deployment
+        if (contractAddresses && Object.keys(contractAddresses).length > 0) {
+          console.log("\n" + "=".repeat(70));
+          console.log("💉 INJECTING CONTRACT ADDRESSES INTO FILES");
+          console.log("=".repeat(70) + "\n");
+
+          generatedFiles = updateFilesWithContractAddresses(
+            generatedFiles,
+            contractAddresses
+          );
+
+          // Rewrite files with injected addresses
+          await writeFilesToDir(userDir, generatedFiles);
+          await saveFilesToGenerated(projectId, generatedFiles);
+          console.log("✅ Contract addresses injected and files updated");
+        }
+      } catch (contractError) {
+        console.error("\n" + "=".repeat(70));
+        console.error("⚠️  CONTRACT DEPLOYMENT FAILED - CONTINUING WITH PLACEHOLDERS");
+        console.error("=".repeat(70));
+        console.error("Error:", contractError);
+        console.log("📝 App will deploy with placeholder addresses\n");
+        // Continue with placeholder addresses - don't fail the entire job
+      }
+    }
+
+    // Create preview (now with real contract addresses injected if Web3)
     console.log("🚀 Creating preview...");
     let previewData;
     let projectUrl;
 
     try {
+      // Skip contract deployment in /deploy endpoint if we already deployed them
+      const skipContractsInDeploy = !!contractAddresses; // true if we already deployed contracts
+
       previewData = await createPreview(
         projectId,
-        generatedFiles,
+        generatedFiles, // Already contains real addresses if Web3
         accessToken,
-        enhancedResult.intentSpec?.isWeb3 // Pass isWeb3 flag to preview API
+        enhancedResult.intentSpec?.isWeb3, // Pass isWeb3 flag to preview API
+        skipContractsInDeploy // Skip contracts if we already deployed them
       );
       console.log("✅ Preview created successfully");
 
@@ -669,18 +720,23 @@ async function executeInitialGenerationJob(
     if (previewData && previewData.vercelUrl) {
       try {
         console.log("💾 Saving deployment info to database...");
+
+        // Use contract addresses from our deployment (already injected into files)
+        // Fall back to previewData.contractAddresses for backward compatibility
+        const deploymentContractAddresses = contractAddresses || previewData.contractAddresses;
+
         const deployment = await createDeployment(
           project.id, // Use actual project.id from database record
           'vercel',
           previewData.vercelUrl,
           'success',
           undefined, // buildLogs
-          previewData.contractAddresses // Contract addresses (if any)
+          deploymentContractAddresses // Contract addresses (real ones from our deployment)
         );
         console.log(`✅ Deployment saved to database: ${deployment.id}`);
 
-        if (previewData.contractAddresses && Object.keys(previewData.contractAddresses).length > 0) {
-          console.log(`📝 Contract addresses saved:`, JSON.stringify(previewData.contractAddresses, null, 2));
+        if (deploymentContractAddresses && Object.keys(deploymentContractAddresses).length > 0) {
+          console.log(`📝 Contract addresses saved:`, JSON.stringify(deploymentContractAddresses, null, 2));
         }
       } catch (deploymentError) {
         console.error("⚠️ Failed to save deployment info:", deploymentError);
@@ -699,6 +755,7 @@ async function executeInitialGenerationJob(
       previewUrl: previewData.previewUrl || projectUrl,
       vercelUrl: previewData.vercelUrl,
       projectName,
+      contractAddresses: contractAddresses, // Include contract addresses in result
     };
 
     await updateGenerationJobStatus(jobId, "completed", result);

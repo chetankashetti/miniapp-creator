@@ -39,18 +39,84 @@ export interface PreviewFile {
   content: string;
 }
 
+/**
+ * Deploy contracts BEFORE deploying the app
+ * This allows us to inject real contract addresses into the code before first deployment
+ * Returns contract addresses to inject into code
+ */
+export async function deployContractsFirst(
+  projectId: string,
+  files: { filename: string; content: string }[],
+  accessToken: string
+): Promise<{ [key: string]: string }> {
+
+  console.log(`\n${"=".repeat(60)}`);
+  console.log(`🔗 DEPLOYING CONTRACTS FIRST FOR PROJECT: ${projectId}`);
+  console.log(`${"=".repeat(60)}\n`);
+
+  try {
+    // Convert files to API format
+    const filesArray = files.map(f => ({
+      path: f.filename,
+      content: f.content
+    }));
+
+    console.log(`📤 Sending ${filesArray.length} files to contract deployment endpoint...`);
+
+    const response = await fetch(`${PREVIEW_API_BASE}/deploy-contracts`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        projectId,
+        files: filesArray
+      }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`❌ Contract deployment API returned error: ${response.status}`);
+      console.error(`❌ Error details: ${errorText}`);
+      throw new Error(`Contract deployment failed: ${response.status} ${errorText}`);
+    }
+
+    const result = await response.json();
+
+    if (!result.success) {
+      console.error(`❌ Contract deployment failed:`, result.error);
+      throw new Error(result.error || "Contract deployment failed");
+    }
+
+    console.log(`✅ Contracts deployed successfully!`);
+    console.log(`📝 Contract addresses received:`, JSON.stringify(result.contractAddresses, null, 2));
+    console.log(`🌐 Network: ${result.network}`);
+    console.log(`⏱️  Deployment time: ${result.deploymentTime}ms`);
+
+    return result.contractAddresses || {};
+
+  } catch (error) {
+    console.error(`❌ Failed to deploy contracts for ${projectId}:`, error);
+    console.error(`❌ Error stack:`, error instanceof Error ? error.stack : 'No stack trace');
+    throw error;
+  }
+}
+
 // Create a preview using the external API
 export async function createPreview(
   projectId: string,
   files: { filename: string; content: string }[],
   accessToken: string,
-  isWeb3?: boolean
+  isWeb3?: boolean,
+  skipContracts?: boolean // NEW: Allow caller to specify if contracts already deployed
 ): Promise<PreviewResponse> {
   console.log(`🚀 Creating preview for project: ${projectId}`);
   console.log(`📁 Files count: ${files.length}`);
   console.log(`🔑 Access token: ${accessToken ? 'Present' : 'Missing'}`);
   console.log(`🌐 Preview API Base: ${PREVIEW_API_BASE}`);
   console.log(`🔧 isWeb3: ${isWeb3 !== undefined ? isWeb3 : 'not specified'}`);
+  console.log(`🔧 skipContracts: ${skipContracts !== undefined ? skipContracts : 'not specified'}`);
 
   try {
     // Convert files array to object format expected by the API
@@ -61,12 +127,17 @@ export async function createPreview(
 
     console.log(`📦 Converted ${Object.keys(filesObject).length} files to object format`);
 
+    // Skip contracts if:
+    // 1. Explicitly told to skip (contracts already deployed)
+    // 2. Non-Web3 app
+    const shouldSkipContracts = skipContracts ?? (isWeb3 === false);
+
     const requestBody = {
       hash: projectId,
       files: filesObject,
       deployToExternal: "vercel",
       isWeb3: isWeb3 !== undefined ? isWeb3 : true, // Default to true for backward compatibility
-      skipContracts: isWeb3 === false, // Explicitly tell preview API to skip contracts for non-Web3 apps
+      skipContracts: shouldSkipContracts, // Skip if already deployed OR non-Web3
     };
 
     console.log(`📤 Sending request to: ${PREVIEW_API_BASE}/deploy`);
@@ -167,10 +238,14 @@ export async function createPreview(
       // Parse contract addresses from deployment response
       const contractAddresses = parseContractAddressesFromDeployment(apiResponse);
 
-      // If contract addresses were deployed, inject them into the files and re-save
+      // LEGACY FALLBACK: If contract addresses were deployed by the orchestrator (old flow),
+      // inject them into the files and re-save
+      // NOTE: With the new flow, contracts are deployed FIRST via /deploy-contracts,
+      // so this code should rarely execute. It's kept for backward compatibility.
       if (contractAddresses && Object.keys(contractAddresses).length > 0) {
         console.log(`\n${"=".repeat(60)}`);
-        console.log(`📝 CONTRACT ADDRESSES DETECTED - INJECTING INTO PROJECT`);
+        console.log(`📝 LEGACY: CONTRACT ADDRESSES DETECTED FROM ORCHESTRATOR`);
+        console.log(`📝 (This shouldn't happen with new deploy-contracts-first flow)`);
         console.log(`${"=".repeat(60)}`);
         console.log(`Deployed contracts:`, contractAddresses);
 
