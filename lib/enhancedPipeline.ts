@@ -2,7 +2,8 @@ import {
   executeInitialGenerationPipeline,
   executeFollowUpPipeline,
   STAGE_MODEL_CONFIG,
-  ContextGatheringResult
+  ContextGatheringResult,
+  IntentSpec
 } from './llmOptimizer';
 import { gatherContextWithTools } from './toolExecutionService';
 import { generateDiff, applyDiffToContent, validateDiff, FileDiff, DiffHunk } from './diffUtils';
@@ -11,7 +12,7 @@ export interface EnhancedPipelineResult {
   success: boolean;
   files: { filename: string; content: string; diff?: FileDiff }[];
   contextData?: string;
-  intentSpec?: { feature: string; reason?: string };
+  intentSpec?: IntentSpec;
   error?: string;
 }
 

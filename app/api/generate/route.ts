@@ -1152,6 +1152,69 @@ export async function PATCH(request: NextRequest) {
       );
     }
 
+    // ASYNC MODE: Create job and return immediately (non-streaming only)
+    const useAsyncProcessing = request.headers.get("X-Use-Async-Processing") === "true" ||
+                                process.env.USE_ASYNC_PROCESSING === "true";
+
+    if (useAsyncProcessing && !stream) {
+      console.log(`🔄 ASYNC MODE: Creating follow-up edit job for project ${projectId}`);
+
+      // Import async dependencies
+      const { createGenerationJob } = await import("../../../lib/database");
+
+      // Create job for follow-up edit
+      const jobContext = {
+        prompt,
+        existingProjectId: projectId,
+        isFollowUp: true,        // Flag to identify this as a follow-up edit
+        useDiffBased,            // Whether to use diff-based pipeline
+      };
+
+      const job = await createGenerationJob(
+        user.id,
+        prompt,
+        jobContext,
+        projectId  // Link to existing project
+      );
+
+      console.log(`✅ Follow-up job created with ID: ${job.id}`);
+
+      // Trigger background processing
+      const workerToken = process.env.WORKER_AUTH_TOKEN || 'dev-worker-token';
+      const workerUrl = process.env.WORKER_URL || `${request.nextUrl.origin}/api/jobs/process`;
+
+      console.log(`🔧 Triggering background worker at: ${workerUrl}`);
+
+      // Fire and forget - don't await this
+      fetch(workerUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${workerToken}`,
+        },
+        body: JSON.stringify({ jobId: job.id }),
+      }).catch(error => {
+        console.error('⚠️ Failed to trigger background worker:', error);
+        // Job will be picked up by scheduled worker polling
+      });
+
+      // Return immediately with 202 Accepted and job ID
+      return NextResponse.json({
+        accepted: true,
+        jobId: job.id,
+        status: 'pending',
+        message: 'Follow-up edit job created and processing started',
+        pollUrl: `/api/jobs/${job.id}`,
+        estimatedTime: '2-5 minutes',
+        projectId,
+      }, {
+        status: 202, // 202 Accepted
+        headers: {
+          'Location': `/api/jobs/${job.id}`,
+        },
+      });
+    }
+
     if (stream) {
       // Handle streaming response for chat-like interaction
       const systemPrompt = `You are an AI assistant helping to modify a Farcaster miniapp. 

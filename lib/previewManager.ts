@@ -43,12 +43,14 @@ export interface PreviewFile {
 export async function createPreview(
   projectId: string,
   files: { filename: string; content: string }[],
-  accessToken: string
+  accessToken: string,
+  isWeb3?: boolean
 ): Promise<PreviewResponse> {
   console.log(`🚀 Creating preview for project: ${projectId}`);
   console.log(`📁 Files count: ${files.length}`);
   console.log(`🔑 Access token: ${accessToken ? 'Present' : 'Missing'}`);
   console.log(`🌐 Preview API Base: ${PREVIEW_API_BASE}`);
+  console.log(`🔧 isWeb3: ${isWeb3 !== undefined ? isWeb3 : 'not specified'}`);
 
   try {
     // Convert files array to object format expected by the API
@@ -63,6 +65,8 @@ export async function createPreview(
       hash: projectId,
       files: filesObject,
       deployToExternal: "vercel",
+      isWeb3: isWeb3 !== undefined ? isWeb3 : true, // Default to true for backward compatibility
+      skipContracts: isWeb3 === false, // Explicitly tell preview API to skip contracts for non-Web3 apps
     };
 
     console.log(`📤 Sending request to: ${PREVIEW_API_BASE}/deploy`);
@@ -177,6 +181,20 @@ export async function createPreview(
         try {
           await saveFilesToGenerated(projectId, updatedFiles);
           console.log(`✅ Updated files saved with contract addresses`);
+
+          // Auto-redeploy to Vercel with real contract addresses
+          console.log(`\n${"=".repeat(60)}`);
+          console.log(`🔄 REDEPLOYING TO VERCEL WITH REAL CONTRACT ADDRESSES`);
+          console.log(`${"=".repeat(60)}`);
+
+          try {
+            await updatePreviewFiles(projectId, updatedFiles, accessToken);
+            console.log(`✅ Vercel deployment updated with real contract addresses`);
+          } catch (redeployError) {
+            console.error(`⚠️  Failed to redeploy with contract addresses:`, redeployError);
+            console.log(`📁 Files have been saved locally but Vercel deployment may have old addresses`);
+            // Don't fail the entire deployment - local files are updated
+          }
         } catch (saveError) {
           console.error(`⚠️  Failed to save updated files:`, saveError);
         }

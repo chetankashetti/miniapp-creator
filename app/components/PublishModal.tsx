@@ -1,286 +1,159 @@
 'use client';
 
 import { useState } from 'react';
-import { Copy, Check } from 'lucide-react';
+import { sdk } from '@farcaster/miniapp-sdk';
 
 interface PublishModalProps {
     isOpen: boolean;
     onClose: () => void;
     projectUrl?: string;
+    projectId?: string;
 }
 
-export function PublishModal({ isOpen, onClose, projectUrl }: PublishModalProps) {
+export function PublishModal({ isOpen, onClose, projectUrl, projectId }: PublishModalProps) {
     const [currentStep, setCurrentStep] = useState(1);
-    const [copied, setCopied] = useState(false);
-    const [domainCopied, setDomainCopied] = useState(false);
+    const [isLoading, setIsLoading] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+    const [manifestUrl, setManifestUrl] = useState<string | null>(null);
 
-    const handleCopyMessage = async () => {
-        const message = 'Update the farcaster.json file with this manifest: [paste your manifest JSON here]';
+    // Form fields
+    const [formData, setFormData] = useState({
+        name: '',
+        iconUrl: '',
+        description: '',
+        homeUrl: projectUrl || '',
+        splashImageUrl: '',
+        splashBackgroundColor: '#ffffff'
+    });
+
+    // Form validation
+    const validateForm = () => {
+        if (!formData.name.trim()) {
+            setError('App name is required');
+            return false;
+        }
+        if (!formData.iconUrl.trim()) {
+            setError('Icon URL is required');
+            return false;
+        }
+        if (!formData.homeUrl.trim()) {
+            setError('Home URL is required');
+            return false;
+        }
+        // Validate URLs
         try {
-            await navigator.clipboard.writeText(message);
-            setCopied(true);
-            setTimeout(() => setCopied(false), 2000);
+            new URL(formData.iconUrl);
+            new URL(formData.homeUrl);
+            if (formData.splashImageUrl && formData.splashImageUrl.trim()) {
+                new URL(formData.splashImageUrl);
+            }
+        } catch {
+            setError('Please provide valid URLs');
+            return false;
+        }
+        return true;
+    };
+
+    // Handle sign and publish
+    const handleSignAndPublish = async () => {
+        if (!validateForm()) return;
+        if (!projectId) {
+            setError('Project ID is missing');
+            return;
+        }
+
+        setIsLoading(true);
+        setError(null);
+        setCurrentStep(2); // Move to signing step
+
+        try {
+            // Step 1: Sign with SDK
+            const domain = new URL(formData.homeUrl).hostname;
+            console.log('Signing manifest for domain:', domain);
+
+            const accountAssociation = await sdk.experimental.signManifest({ domain });
+            console.log('Manifest signed successfully');
+
+            // Step 2: Build complete manifest
+            const manifest = {
+                accountAssociation,
+                miniapp: {
+                    version: 'vNext',
+                    name: formData.name,
+                    iconUrl: formData.iconUrl,
+                    homeUrl: formData.homeUrl,
+                    ...(formData.description && { description: formData.description }),
+                    ...(formData.splashImageUrl && {
+                        splashImageUrl: formData.splashImageUrl,
+                        splashBackgroundColor: formData.splashBackgroundColor
+                    })
+                }
+            };
+
+            console.log('Publishing manifest:', manifest);
+
+            // Step 3: Send to API
+            const sessionToken = sessionStorage.getItem('sessionToken');
+            if (!sessionToken) {
+                throw new Error('Not authenticated. Please sign in first.');
+            }
+
+            const response = await fetch('/api/publish', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${sessionToken}`
+                },
+                body: JSON.stringify({
+                    projectId,
+                    manifest
+                })
+            });
+
+            const result = await response.json();
+
+            if (!result.success) {
+                throw new Error(result.error || 'Failed to publish');
+            }
+
+            console.log('Publish successful:', result);
+            setManifestUrl(result.manifestUrl);
+            setCurrentStep(3); // Move to success step
         } catch (err) {
-            console.error('Failed to copy text: ', err);
+            console.error('Publish error:', err);
+
+            // Handle specific errors
+            let errorMessage = 'Failed to publish. ';
+
+            if (err instanceof Error) {
+                if (err.message.includes('not signed in') || err.message.includes('Not authenticated')) {
+                    errorMessage += 'Please sign in to Farcaster first. Visit https://warpcast.com/ to create an account.';
+                } else if (err.message.includes('signManifest')) {
+                    errorMessage += 'SDK signing failed. Make sure you are using a Farcaster-enabled browser or wallet.';
+                } else {
+                    errorMessage += err.message;
+                }
+            } else {
+                errorMessage += 'Please try again or create manifest manually at https://miniapps.farcaster.xyz/';
+            }
+
+            setError(errorMessage);
+            setCurrentStep(1); // Back to form
+        } finally {
+            setIsLoading(false);
         }
     };
 
-    const handleCopyDomain = async () => {
-        if (!projectUrl) return;
-        const domain = projectUrl.replace(/^https?:\/\//, '');
-        try {
-            await navigator.clipboard.writeText(domain);
-            setDomainCopied(true);
-            setTimeout(() => setDomainCopied(false), 2000);
-        } catch (err) {
-            console.error('Failed to copy domain: ', err);
-        }
+    // Reset form when modal closes
+    const handleClose = () => {
+        setCurrentStep(1);
+        setError(null);
+        setManifestUrl(null);
+        setIsLoading(false);
+        onClose();
     };
 
     if (!isOpen) return null;
-
-    const steps = [
-        {
-            id: 1,
-            title: "Create Farcaster Manifest",
-            description: "Set up your manifest using Farcaster's Developer Tools.",
-            content: (
-                <div className="space-y-4">
-
-
-                    {projectUrl && (
-                        <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
-                            <h4 className="font-semibold text-gray-900 mb-2">Your Project Domain</h4>
-                            <div className="flex items-center gap-2">
-                                <code className="text-sm text-gray-700 break-all bg-gray-100 p-2 rounded flex-1">
-                                    {projectUrl.replace(/^https?:\/\//, '')}
-                                </code>
-                                <button
-                                    onClick={handleCopyDomain}
-                                    className="p-2 hover:bg-gray-200 rounded transition-colors duration-200"
-                                    title={domainCopied ? "Copied!" : "Copy domain"}
-                                >
-                                    {domainCopied ? (
-                                        <Check className="w-5 h-5 text-green-600" />
-                                    ) : (
-                                        <Copy className="w-5 h-5 text-gray-600" />
-                                    )}
-                                </button>
-                            </div>
-                            <p className="text-xs text-gray-600 mt-2">
-                                Use this domain (without https://) when creating your manifest
-                            </p>
-                        </div>
-                    )}
-
-                    <div className="bg-purple-50 border border-purple-200 rounded-lg p-4">
-                        <h4 className="font-semibold text-purple-900 mb-3">Steps to Create Manifest</h4>
-                        <ol className="text-sm text-purple-800 space-y-3">
-                            <li className="flex items-start gap-3">
-                                <span className="bg-purple-600 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs font-medium flex-shrink-0 mt-0.5">1</span>
-                                <div>
-                                    <strong>Visit Farcaster Developer Tools</strong>
-                                    <br />
-                                    <a href="https://farcaster.xyz/~/developers/mini-apps/manifest" target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">
-                                        https://farcaster.xyz/~/developers/mini-apps/manifest
-                                    </a>
-                                </div>
-                            </li>
-                            <li className="flex items-start gap-3">
-                                <span className="bg-purple-600 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs font-medium flex-shrink-0 mt-0.5">2</span>
-                                <div>
-                                    <strong>Click &quot;+ New&quot; Button</strong>
-                                    <br />
-                                    Click the &quot;+ New&quot; button to create a new manifest
-                                </div>
-                            </li>
-                            <li className="flex items-start gap-3">
-                                <span className="bg-purple-600 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs font-medium flex-shrink-0 mt-0.5">3</span>
-                                <div>
-                                    <strong>Enter your app details</strong>
-                                    <br />
-                                    Use the domain above (without https://) and fill in all other required information
-                                </div>
-                            </li>
-                            <li className="flex items-start gap-3">
-                                <span className="bg-purple-600 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs font-medium flex-shrink-0 mt-0.5">4</span>
-                                <div>
-                                    <strong>Click Submit</strong>
-                                    <br />
-                                    After filling in all required information, click the Submit button to create your manifest
-                                </div>
-                            </li>
-                            <li className="flex items-start gap-3">
-                                <span className="bg-purple-600 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs font-medium flex-shrink-0 mt-0.5">5</span>
-                                <div>
-                                    <strong>Copy your Manifest JSON</strong>
-                                    <br />
-                                    Copy the complete manifest JSON object that includes all your app details
-                                </div>
-                            </li>
-                        </ol>
-                    </div>
-
-                    <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
-                        <h4 className="font-semibold text-gray-900 mb-3">Required Information</h4>
-                        <ul className="text-sm text-gray-800 space-y-2">
-                            <li>• <strong>Domain:</strong> Your app&apos;s hosting domain (without https://)</li>
-                            <li>• <strong>App Name:</strong> Your miniapp&apos;s display name</li>
-                            <li>• <strong>Subtitle:</strong> Very short description of your app</li>
-                            <li>• <strong>Description:</strong> Brief description of your app</li>
-                            <li>• <strong>Icon URL:</strong> Publicly accessible icon image (https:// required)</li>
-                            <li>• <strong>Primary Category:</strong> Main app category (e.g., games, social, finance)</li>
-                            <li>• <strong>Splash Image:</strong> Loading screen image (https:// required)</li>
-                            <li>• <strong>Splash Background Color:</strong> Background color of the splash screen</li>
-                        </ul>
-                    </div>
-
-                    <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-                        <h4 className="font-semibold text-blue-900 mb-3">What You&apos;ll Get from Farcaster</h4>
-                        <p className="text-sm text-blue-800 mb-3">
-                            After creating your manifest, Farcaster will provide you with a JSON object that looks like this example.
-                            This contains all the information needed to make your app discoverable on Farcaster.
-                        </p>
-                        <pre className="bg-gray-900 text-green-400 p-4 rounded-lg text-sm overflow-x-auto whitespace-pre">
-                            <code>{`{
-  "accountAssociation": {
-    "header": "eyJmaWQiOjkxNTIsInR5cGUiOiJjdXN0b2R5Iiwia2V5IjoiMHgwMmVmNzkwRGQ3OTkzQTM1ZkQ4NDdDMDUzRURkQUU5NDBEMDU1NTk2In0",
-    "payload": "eyJkb21haW4iOiJyZXdhcmRzLndhcnBjYXN0LmNvbSJ9",
-    "signature": "MHgxMGQwZGU4ZGYwZDUwZTdmMGIxN2YxMTU2NDI1MjRmZTY0MTUyZGU4ZGU1MWU0MThiYjU4ZjVmZmQxYjRjNDBiNGVlZTRhNDcwNmVmNjhlMzQ0ZGQ5MDBkYmQyMmNlMmVlZGY5ZGQ0N2JlNWRmNzMwYzUxNjE4OWVjZDJjY2Y0MDFj"
-  },
-  "miniapp": {
-    "version": "1",
-    "name": "Your App Name",
-    "iconUrl": "https://your-domain.com/icon.png",
-    "splashImageUrl": "https://your-domain.com/splash.png",
-    "splashBackgroundColor": "#000000",
-    "homeUrl": "https://your-domain.com",
-    "subtitle": "Your App Subtitle",
-    "description": "Your app description",
-    "primaryCategory": "social",
-    "tags": ["your", "app", "tags"],
-    "heroImageUrl": "https://your-domain.com/hero.png",
-    "tagline": "Your app tagline",
-    "ogTitle": "Your App Title",
-    "ogDescription": "Your app description for social sharing",
-    "ogImageUrl": "https://your-domain.com/og-image.png"
-  }
-}`}</code>
-                        </pre>
-                        <div className="mt-3 p-3 bg-blue-100 rounded-lg">
-                            <p className="text-xs text-blue-700">
-                                <strong>💡 Tip:</strong> The <code className="bg-blue-200 px-1 rounded">accountAssociation</code> section contains your app&apos;s authentication details.
-                                The <code className="bg-blue-200 px-1 rounded">miniapp/frame</code> section contains your app&apos;s display information.
-                            </p>
-                        </div>
-                    </div>
-                </div>
-            )
-        },
-        {
-            id: 2,
-            title: "Update Your App with the Manifest",
-            description: "Use the Minidev to update your farcaster.json file with the manifest.",
-            content: (
-                <div className="space-y-4">
-
-                    <div className="bg-gray-100 border border-gray-300 rounded-lg p-4">
-                        <h4 className="font-semibold text-gray-900 mb-3">Tell Minidev to Update Your App</h4>
-                        <p className="text-sm text-gray-800 mb-3">
-                            Once you have your manifest JSON from Farcaster, you need to tell Minidev to update your app with this information.
-                        </p>
-                        <div className="bg-white border border-green-300 rounded-lg p-4">
-                            <h5 className="font-medium text-green-900 mb-2">Copy this message and paste it in the chat:</h5>
-                            <div className="bg-gray-50 border border-gray-300 rounded p-3 text-sm flex items-center justify-between">
-                                <code className="text-green-700 font-mono flex-1">
-                                    Update the farcaster.json file with this manifest: [paste your manifest JSON here]
-                                </code>
-                                <button
-                                    onClick={handleCopyMessage}
-                                    className="ml-3 p-2 hover:bg-gray-200 rounded transition-colors duration-200"
-                                    title={copied ? "Copied!" : "Copy message"}
-                                >
-                                    {copied ? (
-                                        <Check className="w-5 h-5 text-green-600" />
-                                    ) : (
-                                        <Copy className="w-5 h-5 text-gray-600" />
-                                    )}
-                                </button>
-                            </div>
-                            <div className="mt-3 p-2 bg-green-100 rounded">
-                                <p className="text-xs text-green-700">
-                                    <strong> Instructions:</strong> Replace <code className="bg-green-200 px-1 rounded">[paste your manifest JSON here]</code> with the actual JSON you copied from Farcaster in Step 1.
-                                </p>
-                            </div>
-                        </div>
-                    </div>
-
-
-                    <div className="bg-purple-50 border border-purple-200 rounded-lg p-4">
-                        <h4 className="font-semibold text-purple-900 mb-3">What Happens Next</h4>
-                        <div className="space-y-3">
-                            <div className="flex items-start gap-3">
-                                <div className="bg-purple-600 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs font-medium flex-shrink-0 mt-0.5">1</div>
-                                <div>
-                                    <strong className="text-purple-900">Minidev Updates Your App</strong>
-                                    <p className="text-sm text-purple-800">Minidev will automatically update your farcaster.json file with the manifest you provided</p>
-                                </div>
-                            </div>
-                            <div className="flex items-start gap-3">
-                                <div className="bg-purple-600 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs font-medium flex-shrink-0 mt-0.5">2</div>
-                                <div>
-                                    <strong className="text-purple-900">Your App Gets Configured</strong>
-                                    <p className="text-sm text-purple-800">Your app will be properly set up with all the Farcaster requirements and settings</p>
-                                </div>
-                            </div>
-                            <div className="flex items-start gap-3">
-                                <div className="bg-purple-600 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs font-medium flex-shrink-0 mt-0.5">3</div>
-                                <div>
-                                    <strong className="text-purple-900">Manifest Goes Live</strong>
-                                    <p className="text-sm text-purple-800">The manifest will be available at your domain at <code className="bg-purple-200 px-1 rounded">/.well-known/farcaster.json</code></p>
-                                </div>
-                            </div>
-                            <div className="flex items-start gap-3">
-                                <div className="bg-purple-600 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs font-medium flex-shrink-0 mt-0.5">4</div>
-                                <div>
-                                    <strong className="text-purple-900">Your App Becomes Discoverable</strong>
-                                    <p className="text-sm text-purple-800">Users can now find and use your app directly from Farcaster!</p>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
-                    {/* <div className="bg-orange-50 border border-orange-200 rounded-lg p-4">
-                        <h4 className="font-semibold text-orange-900 mb-3">🔧 Managing Your App After Launch</h4>
-                        <p className="text-sm text-orange-800 mb-3">
-                            Once your app is live on Farcaster, you can manage it through the Farcaster Developer Tools dashboard:
-                        </p>
-                        <div className="space-y-2 text-sm text-orange-800">
-                            <div className="flex items-center gap-2">
-                                <span className="w-2 h-2 bg-orange-500 rounded-full"></span>
-                                <span><strong>Edit App Details:</strong> Update your app's name, description, images, and other information</span>
-                            </div>
-                            <div className="flex items-center gap-2">
-                                <span className="w-2 h-2 bg-orange-500 rounded-full"></span>
-                                <span><strong>Monitor Performance:</strong> Track how many users are discovering and using your app</span>
-                            </div>
-                            <div className="flex items-center gap-2">
-                                <span className="w-2 h-2 bg-orange-500 rounded-full"></span>
-                                <span><strong>Update & Redeploy:</strong> Make changes to your app and redeploy without going through the full setup process</span>
-                            </div>
-                        </div>
-                        <div className="mt-3 p-2 bg-orange-100 rounded">
-                            <p className="text-xs text-orange-700">
-                                <strong>🎯 Pro Tip:</strong> You can always come back to Minidev to make code changes to your app, then update the manifest through Farcaster Developer Tools.
-                            </p>
-                        </div>
-                    </div> */}
-                </div>
-            )
-        }
-    ];
-
-    const currentStepData = steps.find(step => step.id === currentStep);
 
     return (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
@@ -292,12 +165,15 @@ export function PublishModal({ isOpen, onClose, projectUrl }: PublishModalProps)
                             Publish to Farcaster
                         </h2>
                         <p className="text-gray-600 mt-1">
-                            Use Farcaster Hosted Manifests to publish your miniapp
+                            {currentStep === 1 && 'Enter your app details'}
+                            {currentStep === 2 && 'Signing with Farcaster...'}
+                            {currentStep === 3 && 'Your app is published!'}
                         </p>
                     </div>
                     <button
-                        onClick={onClose}
-                        className="p-2 hover:bg-gray-100 rounded-lg transition-colors text-gray-900 cursor-pointer"
+                        onClick={handleClose}
+                        disabled={isLoading}
+                        className={`p-2 hover:bg-gray-100 rounded-lg transition-colors text-gray-900 ${isLoading ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'}`}
                     >
                         <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -308,79 +184,239 @@ export function PublishModal({ isOpen, onClose, projectUrl }: PublishModalProps)
                 {/* Progress Steps */}
                 <div className="px-6 py-4 bg-gray-50">
                     <div className="flex items-center justify-center">
-                        {steps.map((step, index) => (
-                            <div key={step.id} className="flex items-center">
-                                <div className={`flex items-center justify-center w-8 h-8 rounded-full border-2 ${currentStep >= step.id
+                        {[1, 2, 3].map((step, index) => (
+                            <div key={step} className="flex items-center">
+                                <div className={`flex items-center justify-center w-8 h-8 rounded-full border-2 ${currentStep >= step
                                     ? 'bg-black text-white border-black'
                                     : 'bg-white text-gray-400 border-gray-300'
                                     }`}>
-                                    {currentStep > step.id ? (
+                                    {currentStep > step ? (
                                         <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
                                             <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
                                         </svg>
                                     ) : (
-                                        <span className="text-sm font-medium">{step.id}</span>
+                                        <span className="text-sm font-medium">{step}</span>
                                     )}
                                 </div>
-                                {index < steps.length - 1 && (
-                                    <div className={`w-20 h-0.5 mx-2 ${currentStep > step.id ? 'bg-black' : 'bg-gray-300'
-                                        }`} />
+                                {index < 2 && (
+                                    <div className={`w-20 h-0.5 mx-2 ${currentStep > step ? 'bg-black' : 'bg-gray-300'}`} />
                                 )}
                             </div>
                         ))}
+                    </div>
+                    <div className="flex items-center justify-center mt-2">
+                        <span className="text-xs text-gray-600">
+                            {currentStep === 1 && 'Step 1: Fill Details'}
+                            {currentStep === 2 && 'Step 2: Signing'}
+                            {currentStep === 3 && 'Step 3: Complete'}
+                        </span>
                     </div>
                 </div>
 
                 {/* Content */}
                 <div className="p-6 overflow-y-auto max-h-[60vh]">
-                    {currentStepData && (
+                    {/* Step 1: Form */}
+                    {currentStep === 1 && (
                         <div className="space-y-4">
-                            <div>
-                                <h3 className="text-xl font-semibold text-black mb-2">
-                                    Step {currentStepData.id}: {currentStepData.title}
-                                </h3>
-                                <p className="text-gray-600 mb-4">
-                                    {currentStepData.description}
+                            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
+                                <p className="text-sm text-blue-800">
+                                    Fill in your app details below. The manifest will be signed with your Farcaster account and published automatically.
                                 </p>
                             </div>
-                            {currentStepData.content}
+
+                            {error && (
+                                <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-4">
+                                    <p className="text-sm text-red-800">{error}</p>
+                                </div>
+                            )}
+
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">
+                                    App Name <span className="text-red-500">*</span>
+                                </label>
+                                <input
+                                    type="text"
+                                    placeholder="My Awesome App"
+                                    value={formData.name}
+                                    onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-black focus:border-transparent"
+                                    required
+                                />
+                            </div>
+
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">
+                                    Icon URL <span className="text-red-500">*</span>
+                                </label>
+                                <input
+                                    type="url"
+                                    placeholder="https://example.com/icon.png"
+                                    value={formData.iconUrl}
+                                    onChange={(e) => setFormData({ ...formData, iconUrl: e.target.value })}
+                                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-black focus:border-transparent"
+                                    required
+                                />
+                                <p className="text-xs text-gray-500 mt-1">Publicly accessible icon image (recommended: 512x512px)</p>
+                            </div>
+
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">
+                                    Home URL <span className="text-red-500">*</span>
+                                </label>
+                                <input
+                                    type="url"
+                                    placeholder="https://example.com"
+                                    value={formData.homeUrl}
+                                    onChange={(e) => setFormData({ ...formData, homeUrl: e.target.value })}
+                                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-black focus:border-transparent"
+                                    required
+                                />
+                                <p className="text-xs text-gray-500 mt-1">Your app&apos;s main URL</p>
+                            </div>
+
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">
+                                    Description
+                                </label>
+                                <textarea
+                                    placeholder="A brief description of your app"
+                                    value={formData.description}
+                                    onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+                                    rows={3}
+                                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-black focus:border-transparent"
+                                />
+                            </div>
+
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">
+                                    Splash Image URL
+                                </label>
+                                <input
+                                    type="url"
+                                    placeholder="https://example.com/splash.png"
+                                    value={formData.splashImageUrl}
+                                    onChange={(e) => setFormData({ ...formData, splashImageUrl: e.target.value })}
+                                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-black focus:border-transparent"
+                                />
+                                <p className="text-xs text-gray-500 mt-1">Loading screen image (optional)</p>
+                            </div>
+
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">
+                                    Splash Background Color
+                                </label>
+                                <div className="flex items-center gap-2">
+                                    <input
+                                        type="color"
+                                        value={formData.splashBackgroundColor}
+                                        onChange={(e) => setFormData({ ...formData, splashBackgroundColor: e.target.value })}
+                                        className="w-12 h-10 border border-gray-300 rounded cursor-pointer"
+                                    />
+                                    <input
+                                        type="text"
+                                        value={formData.splashBackgroundColor}
+                                        onChange={(e) => setFormData({ ...formData, splashBackgroundColor: e.target.value })}
+                                        className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-black focus:border-transparent"
+                                        placeholder="#ffffff"
+                                    />
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Step 2: Signing */}
+                    {currentStep === 2 && (
+                        <div className="flex flex-col items-center justify-center py-12">
+                            <div className="animate-spin rounded-full h-16 w-16 border-t-2 border-b-2 border-black mb-4"></div>
+                            <h3 className="text-xl font-semibold text-black mb-2">Signing with Farcaster...</h3>
+                            <p className="text-gray-600 text-center max-w-md">
+                                Please approve the signature request in your Farcaster wallet to continue.
+                            </p>
+                        </div>
+                    )}
+
+                    {/* Step 3: Success */}
+                    {currentStep === 3 && (
+                        <div className="flex flex-col items-center justify-center py-12">
+                            <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mb-4">
+                                <svg className="w-8 h-8 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                                </svg>
+                            </div>
+                            <h3 className="text-2xl font-semibold text-black mb-2">Published Successfully!</h3>
+                            <p className="text-gray-600 text-center mb-6">
+                                Your app is now published to Farcaster and discoverable by users.
+                            </p>
+
+                            {manifestUrl && (
+                                <div className="w-full bg-gray-50 border border-gray-200 rounded-lg p-4">
+                                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                                        Manifest URL
+                                    </label>
+                                    <div className="flex items-center gap-2">
+                                        <code className="flex-1 text-sm text-gray-800 bg-white p-2 rounded border border-gray-300 break-all">
+                                            {manifestUrl}
+                                        </code>
+                                        <a
+                                            href={manifestUrl}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="p-2 bg-black text-white rounded hover:bg-gray-800 transition-colors cursor-pointer"
+                                            title="Open manifest"
+                                        >
+                                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                                            </svg>
+                                        </a>
+                                    </div>
+                                </div>
+                            )}
+
+                            <div className="mt-6 bg-blue-50 border border-blue-200 rounded-lg p-4 w-full">
+                                <p className="text-sm text-blue-800">
+                                    <strong>What&apos;s next?</strong> Users can now discover and use your app directly from Farcaster!
+                                </p>
+                            </div>
                         </div>
                     )}
                 </div>
 
                 {/* Footer */}
                 <div className="flex items-center justify-between p-6 border-t border-gray-200 bg-gray-50">
-                    <button
-                        onClick={() => setCurrentStep(Math.max(1, currentStep - 1))}
-                        disabled={currentStep === 1}
-                        className={`px-4 py-2 rounded-lg font-medium transition-colors  ${currentStep === 1
-                            ? 'text-gray-400 cursor-not-allowed'
-                            : 'text-black hover:bg-gray-200 cursor-pointer'
-                            }`}
-                    >
-                        Previous
-                    </button>
-
-                    <div className="flex items-center gap-2">
-                        <span className="text-sm text-gray-600">
-                            Step {currentStep} of {steps.length}
-                        </span>
-                    </div>
-
-                    <button
-                        onClick={() => {
-                            if (currentStep < steps.length) {
-                                setCurrentStep(currentStep + 1);
-                            } else {
-                                onClose();
-                            }
-                        }}
-                        className="px-6 py-2 bg-black text-white rounded-lg font-medium hover:bg-black-80 transition-colors cursor-pointer"
-                    >
-                        {currentStep === steps.length ? 'Finish' : 'Next'}
-                    </button>
+                    {currentStep === 1 && (
+                        <>
+                            <button
+                                onClick={handleClose}
+                                className="px-4 py-2 text-gray-700 hover:bg-gray-200 rounded-lg font-medium transition-colors cursor-pointer"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                onClick={handleSignAndPublish}
+                                disabled={isLoading}
+                                className={`px-6 py-2 bg-black text-white rounded-lg font-medium transition-colors ${
+                                    isLoading ? 'opacity-50 cursor-not-allowed' : 'hover:bg-gray-800 cursor-pointer'
+                                }`}
+                            >
+                                Publish
+                            </button>
+                        </>
+                    )}
+                    {currentStep === 2 && (
+                        <div className="w-full flex justify-center">
+                            <span className="text-sm text-gray-600">Please wait...</span>
+                        </div>
+                    )}
+                    {currentStep === 3 && (
+                        <button
+                            onClick={handleClose}
+                            className="w-full px-6 py-2 bg-black text-white rounded-lg font-medium hover:bg-gray-800 transition-colors cursor-pointer"
+                        >
+                            Close
+                        </button>
+                    )}
                 </div>
             </div>
         </div>
     );
-} 
+}

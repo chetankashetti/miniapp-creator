@@ -22,6 +22,8 @@ export const projects = pgTable('projects', {
   previewUrl: text('preview_url'),
   vercelUrl: text('vercel_url'),
   netlifyUrl: text('netlify_url'),
+  farcasterManifest: jsonb('farcaster_manifest'), // Farcaster miniapp manifest JSON
+  publishedAt: timestamp('published_at'), // When the app was published to Farcaster
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 });

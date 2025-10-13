@@ -1,6 +1,16 @@
 import { db, users, projects, projectFiles, projectPatches, projectDeployments, userSessions, chatMessages, generationJobs } from '../db';
 import { eq, and, desc, sql } from 'drizzle-orm';
 
+// Type definition for generation job context
+export interface GenerationJobContext {
+  prompt: string;
+  existingProjectId?: string;
+  useMultiStage?: boolean;
+  // Follow-up edit specific fields
+  isFollowUp?: boolean;        // Flag to identify follow-up edits vs initial generation
+  useDiffBased?: boolean;      // Whether to use diff-based pipeline
+}
+
 // User management functions
 export async function createUser(privyUserId: string, email?: string, displayName?: string, pfpUrl?: string) {
   const [user] = await db.insert(users).values({

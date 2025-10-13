@@ -14,12 +14,17 @@ import {
   getUserById,
   getProjectById,
   createDeployment,
+  getProjectFiles,
+  savePatch,
+  type GenerationJobContext,
 } from "./database";
 import { executeEnhancedPipeline } from "./enhancedPipeline";
+import { executeDiffBasedPipeline } from "./diffBasedPipeline";
 import {
   createPreview,
   saveFilesToGenerated,
   getPreviewUrl,
+  updatePreviewFiles,
 } from "./previewManager";
 import { STAGE_MODEL_CONFIG, ANTHROPIC_MODELS } from "./llmOptimizer";
 
@@ -369,6 +374,14 @@ function generateProjectName(intentSpec: { feature: string; reason?: string }): 
   return projectName;
 }
 
+// Helper function to get project directory path
+function getProjectDir(projectId: string): string {
+  const outputDir = process.env.NODE_ENV === 'production'
+    ? '/tmp/generated'
+    : path.join(process.cwd(), 'generated');
+  return path.join(outputDir, projectId);
+}
+
 /**
  * Main worker function to execute a generation job
  */
@@ -393,13 +406,40 @@ export async function executeGenerationJob(jobId: string): Promise<void> {
     }
 
     // Extract context from job
-    const context = job.context as {
-      prompt: string;
-      existingProjectId?: string;
-      useMultiStage?: boolean;
-    };
+    const context = job.context as GenerationJobContext;
 
-    const { prompt, existingProjectId } = context;
+    // Route to appropriate handler based on job type
+    if (context.isFollowUp) {
+      console.log(`🔄 Detected follow-up job, routing to follow-up handler`);
+      return await executeFollowUpJob(jobId, job, context);
+    } else {
+      console.log(`🆕 Detected initial generation job, routing to initial generation handler`);
+      return await executeInitialGenerationJob(jobId, job, context);
+    }
+  } catch (error) {
+    console.error(`❌ Job ${jobId} failed:`, error);
+
+    // Update job status to failed
+    await updateGenerationJobStatus(
+      jobId,
+      "failed",
+      undefined,
+      error instanceof Error ? error.message : String(error)
+    );
+
+    throw error;
+  }
+}
+
+/**
+ * Execute initial generation job (new project)
+ */
+async function executeInitialGenerationJob(
+  jobId: string,
+  job: Awaited<ReturnType<typeof getGenerationJobById>>,
+  context: GenerationJobContext
+): Promise<void> {
+  const { prompt, existingProjectId } = context;
     const accessToken = process.env.PREVIEW_AUTH_TOKEN;
 
     if (!accessToken) {
@@ -510,14 +550,35 @@ export async function executeGenerationJob(jobId: string): Promise<void> {
       throw new Error(enhancedResult.error || "Enhanced pipeline failed");
     }
 
-    const generatedFiles = enhancedResult.files.map(f => ({
+    let generatedFiles = enhancedResult.files.map(f => ({
       filename: f.filename,
       content: f.content
     }));
 
     console.log(`✅ Successfully generated ${generatedFiles.length} files`);
 
-    // Write files to disk
+    // Filter out contracts for non-Web3 apps BEFORE writing to disk
+    if (enhancedResult.intentSpec && !enhancedResult.intentSpec.isWeb3) {
+      const originalCount = generatedFiles.length;
+      generatedFiles = generatedFiles.filter(file => {
+        const isContractFile = file.filename.startsWith('contracts/');
+        if (isContractFile) {
+          console.log(`🗑️ Filtering out contract file: ${file.filename}`);
+        }
+        return !isContractFile;
+      });
+      console.log(`📦 Filtered ${originalCount - generatedFiles.length} contract files from generated output`);
+
+      // Also delete contracts directory from disk if it exists
+      const contractsDir = path.join(userDir, 'contracts');
+      if (await fs.pathExists(contractsDir)) {
+        console.log("🗑️ Removing contracts/ directory from disk...");
+        await fs.remove(contractsDir);
+        console.log("✅ Contracts directory removed from disk");
+      }
+    }
+
+    // Write files to disk (now without contracts for non-Web3 apps)
     console.log("💾 Writing generated files to disk...");
     await writeFilesToDir(userDir, generatedFiles);
     await saveFilesToGenerated(projectId, generatedFiles);
@@ -532,7 +593,8 @@ export async function executeGenerationJob(jobId: string): Promise<void> {
       previewData = await createPreview(
         projectId,
         generatedFiles,
-        accessToken
+        accessToken,
+        enhancedResult.intentSpec?.isWeb3 // Pass isWeb3 flag to preview API
       );
       console.log("✅ Preview created successfully");
 
@@ -578,7 +640,21 @@ export async function executeGenerationJob(jobId: string): Promise<void> {
 
     // Save files to database (this will replace existing files)
     const allFiles = await readAllFiles(userDir);
-    const safeFiles = allFiles.filter(file => {
+
+    // Filter out contracts/ for non-Web3 apps
+    const filesToSave = enhancedResult.intentSpec && !enhancedResult.intentSpec.isWeb3
+      ? allFiles.filter(file => {
+          const isContractFile = file.filename.startsWith('contracts/');
+          if (isContractFile) {
+            console.log(`🗑️ Excluding contract file from database: ${file.filename}`);
+          }
+          return !isContractFile;
+        })
+      : allFiles;
+
+    console.log(`📦 Files to save: ${filesToSave.length} (excluded ${allFiles.length - filesToSave.length} contract files)`);
+
+    const safeFiles = filesToSave.filter(file => {
       if (file.content.includes('\0') || file.content.includes('\x00')) {
         console.log(`⚠️ Skipping file with null bytes: ${file.filename}`);
         return false;
@@ -628,17 +704,190 @@ export async function executeGenerationJob(jobId: string): Promise<void> {
     await updateGenerationJobStatus(jobId, "completed", result);
 
     console.log(`✅ Job ${jobId} completed successfully`);
-  } catch (error) {
-    console.error(`❌ Job ${jobId} failed:`, error);
+}
 
-    // Update job status to failed
-    await updateGenerationJobStatus(
-      jobId,
-      "failed",
-      undefined,
-      error instanceof Error ? error.message : String(error)
-    );
+/**
+ * Execute follow-up edit job (existing project)
+ */
+async function executeFollowUpJob(
+  jobId: string,
+  job: Awaited<ReturnType<typeof getGenerationJobById>>,
+  context: GenerationJobContext
+): Promise<void> {
+  console.log(`🔄 Starting follow-up job execution: ${jobId}`);
 
-    throw error;
+  const { prompt, existingProjectId: projectId, useDiffBased = true } = context;
+  const accessToken = process.env.PREVIEW_AUTH_TOKEN;
+
+  if (!accessToken) {
+    throw new Error("Missing preview auth token");
   }
+
+  if (!projectId) {
+    throw new Error("Follow-up job requires existingProjectId in context");
+  }
+
+  // Get user
+  const user = await getUserById(job.userId);
+  if (!user) {
+    throw new Error(`User ${job.userId} not found`);
+  }
+
+  console.log(`🔧 Processing follow-up job for user: ${user.email || user.id}`);
+  console.log(`📋 Prompt: ${prompt.substring(0, 100)}...`);
+  console.log(`📁 Project ID: ${projectId}`);
+
+  // Get project directory
+  const userDir = getProjectDir(projectId);
+  const outputDir = process.env.NODE_ENV === 'production' ? '/tmp/generated' : path.join(process.cwd(), 'generated');
+
+  // Ensure output directory exists
+  fs.mkdirSync(outputDir, { recursive: true });
+
+  // Load existing files
+  let currentFiles: { filename: string; content: string }[] = [];
+
+  try {
+    // Try reading from disk first
+    if (await fs.pathExists(userDir)) {
+      console.log(`📁 Reading files from disk: ${userDir}`);
+      currentFiles = await readAllFiles(userDir);
+    } else {
+      console.log(`💾 Directory not found on disk, fetching from database for project: ${projectId}`);
+      // Fetch files from database
+      const dbFiles = await getProjectFiles(projectId);
+      currentFiles = dbFiles.map(f => ({
+        filename: f.filename,
+        content: f.content
+      }));
+
+      if (currentFiles.length > 0) {
+        console.log(`✅ Loaded ${currentFiles.length} files from database`);
+        // Recreate the directory structure on disk for processing
+        console.log(`📁 Recreating project directory: ${userDir}`);
+        await writeFilesToDir(userDir, currentFiles);
+        console.log(`✅ Project files restored to disk`);
+      }
+    }
+  } catch (error) {
+    console.error(`❌ Error reading project files:`, error);
+    throw new Error(`Failed to load project files: ${error instanceof Error ? error.message : String(error)}`);
+  }
+
+  if (currentFiles.length === 0) {
+    throw new Error(`No existing files found for project ${projectId}`);
+  }
+
+  console.log(`✅ Loaded ${currentFiles.length} files for follow-up edit`);
+
+  // Create LLM caller
+  const callLLM = async (
+    systemPrompt: string,
+    userPrompt: string,
+    stageName: string,
+    stageType?: keyof typeof STAGE_MODEL_CONFIG
+  ): Promise<string> => {
+    return callClaudeWithLogging(
+      systemPrompt,
+      userPrompt,
+      stageName,
+      stageType
+    );
+  };
+
+  // Execute appropriate pipeline
+  let result;
+  if (useDiffBased) {
+    console.log("🔄 Using diff-based pipeline for follow-up edit");
+    result = await executeDiffBasedPipeline(
+      prompt,
+      currentFiles,
+      callLLM,
+      {
+        enableContextGathering: true,
+        enableDiffValidation: true,
+        enableLinting: true
+      },
+      projectId,
+      userDir
+    );
+  } else {
+    console.log("🔄 Using enhanced pipeline for follow-up edit");
+    result = await executeEnhancedPipeline(
+      prompt,
+      currentFiles,
+      projectId,
+      accessToken,
+      callLLM,
+      false,  // isInitialGeneration = false
+      userDir
+    );
+  }
+
+  // Check if result has diffs (from diff-based pipeline)
+  const hasDiffs = 'diffs' in result && result.diffs;
+  const diffCount = hasDiffs ? (result as { diffs: unknown[] }).diffs.length : 0;
+  console.log(`✅ Generated ${result.files.length} files${hasDiffs ? ` with ${diffCount} diffs` : ''}`);
+
+  // Write changes to disk
+  await writeFilesToDir(userDir, result.files);
+  await saveFilesToGenerated(projectId, result.files);
+
+  // Update preview (optional - may fail on Railway)
+  try {
+    console.log("🔄 Updating preview...");
+    await updatePreviewFiles(projectId, result.files, accessToken);
+    console.log("✅ Preview updated successfully");
+  } catch (previewError) {
+    console.warn("⚠️ Preview update failed (expected on Railway):", previewError);
+  }
+
+  // Save to database
+  const safeFiles = result.files.filter(file => {
+    if (file.content.includes('\0') || file.content.includes('\x00')) {
+      console.log(`⚠️ Skipping file with null bytes: ${file.filename}`);
+      return false;
+    }
+    return true;
+  });
+
+  await saveProjectFiles(projectId, safeFiles);
+  console.log("✅ Project files updated in database");
+
+  // Store patch for rollback (if diffs available)
+  if (hasDiffs && diffCount > 0) {
+    try {
+      const resultWithDiffs = result as unknown as { diffs: Array<{ filename: string }> };
+      console.log(`📦 Storing patch with ${diffCount} diffs for rollback`);
+      const changedFiles = resultWithDiffs.diffs.map(d => d.filename);
+      const description = `Updated ${changedFiles.length} file(s): ${changedFiles.join(', ')}`;
+
+      await savePatch(projectId, {
+        prompt,
+        diffs: resultWithDiffs.diffs,
+        changedFiles,
+        timestamp: new Date().toISOString(),
+      }, description);
+
+      console.log(`✅ Patch saved for rollback`);
+    } catch (patchError) {
+      console.error("⚠️ Failed to save patch:", patchError);
+      // Don't fail the job if patch save fails
+    }
+  }
+
+  // Update job status to completed
+  const jobResult = {
+    success: true,
+    projectId,
+    files: result.files.map(f => ({ filename: f.filename })),
+    diffs: hasDiffs ? (result as { diffs: unknown[] }).diffs : [],
+    changedFiles: result.files.map(f => f.filename),
+    previewUrl: getPreviewUrl(projectId),
+    totalFiles: result.files.length,
+  };
+
+  await updateGenerationJobStatus(jobId, "completed", jobResult);
+
+  console.log(`✅ Follow-up job ${jobId} completed successfully`);
 }
