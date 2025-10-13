@@ -158,6 +158,7 @@ export function PublishModal({ isOpen, onClose, projectUrl, projectId }: Publish
                     console.error('API error response:', errorData);
                 } catch (parseError) {
                     // Response might not be JSON
+                    console.error('Failed to parse error response as JSON:', parseError);
                     const textError = await response.text();
                     console.error('API error (non-JSON):', textError);
                     errorMessage = textError || errorMessage;
