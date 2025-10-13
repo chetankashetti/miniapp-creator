@@ -889,31 +889,68 @@ Required in ALL files with: React hooks, event handlers, or interactive JSX
 `;
 }
 
-function getFarcasterAuthRules(): string {
+function getWeb3AuthRules(): string {
   return `
-FARCASTER AUTHENTICATION (MUST PRESERVE):
-- ALWAYS import ConnectWallet: import { ConnectWallet } from '@/components/wallet/ConnectWallet';
-- ALWAYS use useUser to get auth state: const { isMiniApp, username, address } = useUser();
-- ALWAYS show loading state: if (isLoading) return <div>Loading...</div>;
-- Handle both Farcaster miniapp AND browser wallet modes
-- NEVER remove authentication logic
+=== WEB3 AUTHENTICATION (Farcaster + Wallet) ===
+- Import ConnectWallet: import { ConnectWallet } from '@/components/wallet/ConnectWallet';
+- Import useAccount: import { useAccount } from 'wagmi';
+- Use useUser: const { isMiniApp, username, isLoading } = useUser();
+- Use useAccount: const { address } = useAccount();
+- Show loading state: if (isLoading) return <div>Loading...</div>;
 
 🚨 CRITICAL: APP MUST WORK IN BOTH ENVIRONMENTS
-- Use condition: {isMiniApp || address ? <MainApp /> : <ConnectWallet />}
-- This allows app to work in BOTH Farcaster miniapp AND browser
-- Miniapp users: Authenticated via Farcaster (isMiniApp === true)
-- Browser users: Must connect wallet first (address !== null)
-- NEVER gate functionality behind ONLY isMiniApp - always include address check
+Farcaster mode: Authenticated via Farcaster (isMiniApp === true)
+Browser mode: Must connect wallet for blockchain interactions (address !== null)
 
 CORRECT PATTERN:
 {isMiniApp || address ? (
   <main><!-- Full app functionality --></main>
 ) : (
-  <div><!-- Connect wallet prompt --></div>
+  <ConnectWallet />
 )}
 
-INCORRECT PATTERN:
-❌ {isMiniApp ? <App /> : <ConnectWallet />}  // Wrong: Excludes browser users
+REASONING: Web3 apps require wallet connection in browser for blockchain interactions
+`;
+}
+
+function getNonWeb3AuthRules(): string {
+  return `
+=== NON-WEB3 AUTHENTICATION (Farcaster + Browser) ===
+- DO NOT import ConnectWallet (not needed - no blockchain)
+- DO NOT import wagmi hooks (useAccount, useConnect, etc.)
+- Use useUser: const { isMiniApp, username, isLoading } = useUser();
+- Show loading state: if (isLoading) return <div>Loading...</div>;
+
+🚨 CRITICAL: APP MUST WORK IN BOTH ENVIRONMENTS
+Farcaster mode: Authenticated via Farcaster (isMiniApp === true)
+Browser mode: Works directly, no wallet needed (localStorage-based)
+
+CORRECT PATTERN FOR BROWSER:
+Option 1 - Anonymous mode (best for most apps):
+{isMiniApp ? (
+  <main><!-- Show with Farcaster username --></main>
+) : (
+  <main><!-- Show with generic/anonymous experience --></main>
+)}
+
+Option 2 - Simple name input (for personalized apps):
+const [guestName, setGuestName] = useLocalStorage('userName', '');
+
+{isMiniApp ? (
+  <main>Welcome @{username}</main>
+) : !guestName ? (
+  <div>
+    <input
+      placeholder="Enter your name"
+      value={guestName}
+      onChange={(e) => setGuestName(e.target.value)}
+    />
+  </div>
+) : (
+  <main>Welcome {guestName}</main>
+)}
+
+REASONING: Non-web3 apps work in browser without wallet (localStorage for data)
 `;
 }
 
@@ -1105,6 +1142,11 @@ export function getStage3CodeGeneratorPrompt(
     ? getWeb3Rules()
     : '';
 
+  // Choose auth rules based on web3 requirement
+  const authRules = intentSpec.isWeb3
+    ? getWeb3AuthRules()
+    : getNonWeb3AuthRules();
+
   if (isInitialGeneration) {
     return `
 ROLE: Code Generator for Farcaster Miniapp - Initial Generation
@@ -1123,7 +1165,7 @@ TASK: Generate complete file contents based on the detailed patch plan for initi
 
 ${getCoreGenerationRules()}
 ${getClientDirectiveRules()}
-${getFarcasterAuthRules()}
+${authRules}
 ${getMockDataRules()}
 ${storageRules}
 ${getEslintRules()}
@@ -1156,7 +1198,7 @@ TASK: Generate unified diff patches based on the detailed patch plan. Apply surg
 ${getDiffGenerationRules()}
 ${getCoreGenerationRules()}
 ${getClientDirectiveRules()}
-${getFarcasterAuthRules()}
+${authRules}
 ${getMockDataRules()}
 ${storageRules}
 ${getEslintRules()}
@@ -1498,7 +1540,7 @@ export function validateImportsAndReferences(
 
 /**
  * Filter boilerplate files based on web3 requirement
- * Excludes contracts/ folder for non-web3 apps to save tokens and improve focus
+ * Excludes contracts/ folder and wallet components for non-web3 apps to save tokens and improve focus
  *
  * @param files - Array of files to filter
  * @param isWeb3 - Whether the app requires web3/blockchain functionality
