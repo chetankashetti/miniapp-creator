@@ -322,6 +322,9 @@ export interface IntentSpec {
   // Web3 classification fields
   isWeb3: boolean; // true if this requires blockchain/smart contracts
   storageType: "blockchain" | "localStorage" | "none"; // How data should be persisted
+  // Contract template selection (for Web3 apps)
+  contractTemplate?: "ERC20" | "ERC721" | "Escrow" | "none";
+  contractName?: string; // e.g., "MyNFT", "RewardToken"
 }
 
 export function getStage1IntentParserPrompt(): string {
@@ -403,7 +406,9 @@ OUTPUT FORMAT (JSON ONLY):
     "writes": ["contract functions to write"]
   },
   "isWeb3": boolean,
-  "storageType": "blockchain" | "localStorage" | "none"
+  "storageType": "blockchain" | "localStorage" | "none",
+  "contractTemplate": "ERC20" | "ERC721" | "Escrow" | "none",
+  "contractName": "string (e.g., MyNFT, RewardToken)"
 }
 
 RULES:
@@ -460,7 +465,14 @@ CLASSIFICATION EXAMPLES:
 IMPORTANT: If unclear, default to non-web3 (localStorage) unless the user explicitly mentions:
 - NFTs, tokens, crypto, blockchain, smart contracts, DeFi, on-chain, decentralized
 
-EXAMPLE  1 (Web3 App):
+CONTRACT TEMPLATE SELECTION (for Web3 apps only):
+If isWeb3: true, select which contract template to use:
+- "ERC721": NFTs, collectibles, tickets, badges, digital art
+- "ERC20": Tokens, rewards, airdrops, loyalty points, tipping
+- "Escrow": Payments, marketplaces, freelance, betting, crowdfunding
+- "none": Non-web3 apps
+
+EXAMPLE 1 (Web3 App):
 User: "Create a miniapp with a token airdrop component"
 Output:
 {
@@ -471,27 +483,29 @@ Output:
   "needsChanges": true,
   "reason": "Token airdrop requires new UI and contract integration in tabs",
   "contractInteractions": {
-    "reads": ["fetchTokenBalance", "fetchTokenAllowance", "fetchTokenTotalSupply"],
-    "writes": ["transferTokens", "approveTokens", "mintTokens", "burnTokens"]
+    "reads": ["balanceOf", "totalSupply"],
+    "writes": ["mint", "transfer"]
   },
   "isWeb3": true,
-  "storageType": "blockchain"
+  "storageType": "blockchain",
+  "contractTemplate": "ERC20",
+  "contractName": "AirdropToken"
 }
 
 EXAMPLE 2 (No Changes):
 User: "Create miniapp"
 Output:
-{"feature":"bootstrap","requirements":[],"targetFiles":[],"dependencies":[],"needsChanges":false,"reason":"no specific feature","contractInteractions":{"reads":[],"writes":[]},"isWeb3":false,"storageType":"none"}
+{"feature":"bootstrap","requirements":[],"targetFiles":[],"dependencies":[],"needsChanges":false,"reason":"no specific feature","contractInteractions":{"reads":[],"writes":[]},"isWeb3":false,"storageType":"none","contractTemplate":"none"}
 
-EXAMPLE 3 (Web3 App):
-User: "Add polls feature to miniapp"
+EXAMPLE 3 (Web3 with NFT):
+User: "Build an NFT gallery"
 Output:
-{"feature":"polls","requirements":["createPoll","castVote","fetchPollResults","display in tabs","use useUser for authentication"],"targetFiles":["src/app/page.tsx"],"dependencies":[],"needsChanges":true,"reason":"polls require new UI and contract integration in tab layout","contractInteractions":{"reads":["fetchPollResults","getPollById"],"writes":["createPoll","castVote"]},"isWeb3":true,"storageType":"blockchain"}
+{"feature":"nft-gallery","requirements":["display NFTs","allow minting","use useReadContract for fetching"],"targetFiles":["src/app/page.tsx"],"dependencies":[],"needsChanges":true,"reason":"NFT gallery requires UI and ERC721 integration","contractInteractions":{"reads":["totalSupply","tokenURI","ownerOf"],"writes":["safeMint"]},"isWeb3":true,"storageType":"blockchain","contractTemplate":"ERC721","contractName":"GalleryNFT"}
 
 EXAMPLE 4 (Non-Web3 App):
 User: "Create a leaderboard app with high scores"
 Output:
-{"feature":"leaderboard","requirements":["display top 10 scores","allow users to submit scores","use localStorage for persistence","show empty state when no scores"],"targetFiles":["src/app/page.tsx"],"dependencies":[],"needsChanges":true,"reason":"leaderboard requires new UI and localStorage integration","contractInteractions":{"reads":[],"writes":[]},"isWeb3":false,"storageType":"localStorage"}
+{"feature":"leaderboard","requirements":["display top 10 scores","allow users to submit scores","use localStorage for persistence","show empty state when no scores"],"targetFiles":["src/app/page.tsx"],"dependencies":[],"needsChanges":true,"reason":"leaderboard requires new UI and localStorage integration","contractInteractions":{"reads":[],"writes":[]},"isWeb3":false,"storageType":"localStorage","contractTemplate":"none"}
 REMEMBER: Return ONLY the JSON object above. No other text, no explanations, no markdown formatting.
 `;
 }
@@ -641,12 +655,10 @@ PLANNING RULES:
 - Describe implementation requirements without writing actual code
 - Include dependencies and contract interactions where relevant
 - Ensure all required files are covered with detailed change descriptions
-- If blockchain functionality is requested, specify contract interaction types and functions using the pre-vetted templates:
-  * Reference ERC20Template.sol for token functionality
-  * Reference ERC721Template.sol for NFT functionality  
-  * Reference EscrowTemplate.sol for payment/escrow functionality
-  * Always specify which template to use and how to modify it
-  * ALWAYS include a patch for contracts/scripts/deploy.js to deploy the specific contract
+- 🚨 For Web3 apps (isWeb3: true): Use ONLY existing templates in contracts/src/
+  * ERC20Template.sol, ERC721Template.sol, EscrowTemplate.sol
+  * DO NOT plan new contract logic - templates already have all needed functions
+  * Frontend should integrate with template functions (mint, transfer, etc.)
 - Provide implementation notes for Stage 3 guidance
 - Return valid JSON only
 - Every patch must have a valid changes array with descriptions
@@ -847,11 +859,10 @@ PLANNING RULES:
 - Describe implementation requirements without writing actual code
 - Include dependencies and contract interactions where relevant
 - Ensure all required files are covered with detailed change descriptions
-- If blockchain functionality is requested, specify contract interaction types and functions using the pre-vetted templates:
-  * Reference ERC20Template.sol for token functionality
-  * Reference ERC721Template.sol for NFT functionality  
-  * Reference EscrowTemplate.sol for payment/escrow functionality
-  * Always specify which template to use and how to modify it
+- 🚨 For Web3 apps (isWeb3: true): Use ONLY existing templates in contracts/src/
+  * ERC20Template.sol, ERC721Template.sol, EscrowTemplate.sol
+  * DO NOT plan new contract logic - templates already have all needed functions
+  * Frontend should integrate with template functions (mint, transfer, etc.)
 - Provide implementation notes for Stage 3 guidance
 - Return valid JSON only
 - Every patch must have a valid changes array with descriptions
@@ -889,31 +900,68 @@ Required in ALL files with: React hooks, event handlers, or interactive JSX
 `;
 }
 
-function getFarcasterAuthRules(): string {
+function getWeb3AuthRules(): string {
   return `
-FARCASTER AUTHENTICATION (MUST PRESERVE):
-- ALWAYS import ConnectWallet: import { ConnectWallet } from '@/components/wallet/ConnectWallet';
-- ALWAYS use useUser to get auth state: const { isMiniApp, username, address } = useUser();
-- ALWAYS show loading state: if (isLoading) return <div>Loading...</div>;
-- Handle both Farcaster miniapp AND browser wallet modes
-- NEVER remove authentication logic
+=== WEB3 AUTHENTICATION (Farcaster + Wallet) ===
+- Import ConnectWallet: import { ConnectWallet } from '@/components/wallet/ConnectWallet';
+- Import useAccount: import { useAccount } from 'wagmi';
+- Use useUser: const { isMiniApp, username, isLoading } = useUser();
+- Use useAccount: const { address } = useAccount();
+- Show loading state: if (isLoading) return <div>Loading...</div>;
 
 🚨 CRITICAL: APP MUST WORK IN BOTH ENVIRONMENTS
-- Use condition: {isMiniApp || address ? <MainApp /> : <ConnectWallet />}
-- This allows app to work in BOTH Farcaster miniapp AND browser
-- Miniapp users: Authenticated via Farcaster (isMiniApp === true)
-- Browser users: Must connect wallet first (address !== null)
-- NEVER gate functionality behind ONLY isMiniApp - always include address check
+Farcaster mode: Authenticated via Farcaster (isMiniApp === true)
+Browser mode: Must connect wallet for blockchain interactions (address !== null)
 
 CORRECT PATTERN:
 {isMiniApp || address ? (
   <main><!-- Full app functionality --></main>
 ) : (
-  <div><!-- Connect wallet prompt --></div>
+  <ConnectWallet />
 )}
 
-INCORRECT PATTERN:
-❌ {isMiniApp ? <App /> : <ConnectWallet />}  // Wrong: Excludes browser users
+REASONING: Web3 apps require wallet connection in browser for blockchain interactions
+`;
+}
+
+function getNonWeb3AuthRules(): string {
+  return `
+=== NON-WEB3 AUTHENTICATION (Farcaster + Browser) ===
+- DO NOT import ConnectWallet (not needed - no blockchain)
+- DO NOT import wagmi hooks (useAccount, useConnect, etc.)
+- Use useUser: const { isMiniApp, username, isLoading } = useUser();
+- Show loading state: if (isLoading) return <div>Loading...</div>;
+
+🚨 CRITICAL: APP MUST WORK IN BOTH ENVIRONMENTS
+Farcaster mode: Authenticated via Farcaster (isMiniApp === true)
+Browser mode: Works directly, no wallet needed (localStorage-based)
+
+CORRECT PATTERN FOR BROWSER:
+Option 1 - Anonymous mode (best for most apps):
+{isMiniApp ? (
+  <main><!-- Show with Farcaster username --></main>
+) : (
+  <main><!-- Show with generic/anonymous experience --></main>
+)}
+
+Option 2 - Simple name input (for personalized apps):
+const [guestName, setGuestName] = useLocalStorage('userName', '');
+
+{isMiniApp ? (
+  <main>Welcome @{username}</main>
+) : !guestName ? (
+  <div>
+    <input
+      placeholder="Enter your name"
+      value={guestName}
+      onChange={(e) => setGuestName(e.target.value)}
+    />
+  </div>
+) : (
+  <main>Welcome {guestName}</main>
+)}
+
+REASONING: Non-web3 apps work in browser without wallet (localStorage for data)
 `;
 }
 
@@ -991,6 +1039,15 @@ Always show empty states when data.length === 0
 function getWeb3Rules(): string {
   return `
 === SMART CONTRACT PATTERN (WEB3 APPS) ===
+
+🚨 CONTRACT TEMPLATES:
+Use ONLY existing templates from contracts/src/:
+- ERC20Template.sol (tokens, rewards, airdrops)
+- ERC721Template.sol (NFTs, collectibles, tickets)
+- EscrowTemplate.sol (payments, marketplaces)
+
+NEVER write new .sol files. Reference template functions in frontend code.
+Templates have all needed functions: mint, transfer, balanceOf, etc.
 
 CONTRACT ADDRESS SETUP:
 ✅ Use placeholder initially: const CONTRACT_ADDRESS = '0x0000000000000000000000000000000000000000' as \`0x\${string}\`;
@@ -1105,6 +1162,11 @@ export function getStage3CodeGeneratorPrompt(
     ? getWeb3Rules()
     : '';
 
+  // Choose auth rules based on web3 requirement
+  const authRules = intentSpec.isWeb3
+    ? getWeb3AuthRules()
+    : getNonWeb3AuthRules();
+
   if (isInitialGeneration) {
     return `
 ROLE: Code Generator for Farcaster Miniapp - Initial Generation
@@ -1123,7 +1185,7 @@ TASK: Generate complete file contents based on the detailed patch plan for initi
 
 ${getCoreGenerationRules()}
 ${getClientDirectiveRules()}
-${getFarcasterAuthRules()}
+${authRules}
 ${getMockDataRules()}
 ${storageRules}
 ${getEslintRules()}
@@ -1156,7 +1218,7 @@ TASK: Generate unified diff patches based on the detailed patch plan. Apply surg
 ${getDiffGenerationRules()}
 ${getCoreGenerationRules()}
 ${getClientDirectiveRules()}
-${getFarcasterAuthRules()}
+${authRules}
 ${getMockDataRules()}
 ${storageRules}
 ${getEslintRules()}
@@ -1498,7 +1560,7 @@ export function validateImportsAndReferences(
 
 /**
  * Filter boilerplate files based on web3 requirement
- * Excludes contracts/ folder for non-web3 apps to save tokens and improve focus
+ * Excludes contracts/ folder and wallet components for non-web3 apps to save tokens and improve focus
  *
  * @param files - Array of files to filter
  * @param isWeb3 - Whether the app requires web3/blockchain functionality
@@ -1528,6 +1590,38 @@ export function filterFilesByWeb3Requirement(
   console.log(`💰 Token savings: ~${removed * 150} tokens (estimated)`);
 
   return filtered;
+}
+
+/**
+ * Validate that no new contract files are being generated
+ * Only existing templates should be used
+ *
+ * @param files - Array of generated files
+ * @returns true if validation passes, false otherwise
+ */
+export function validateNoNewContracts(
+  files: { filename: string; content?: string; operation?: string }[]
+): { isValid: boolean; invalidFiles: string[] } {
+  const invalidFiles: string[] = [];
+
+  for (const file of files) {
+    // Check if it's a .sol file
+    if (file.filename.endsWith('.sol')) {
+      // Allow only template files
+      const isTemplate = file.filename.includes('Template.sol');
+
+      if (!isTemplate && file.operation === 'create') {
+        console.error(`❌ Attempted to create new contract: ${file.filename}`);
+        console.error(`❌ Only template-based contracts allowed (ERC20Template.sol, ERC721Template.sol, EscrowTemplate.sol)`);
+        invalidFiles.push(file.filename);
+      }
+    }
+  }
+
+  return {
+    isValid: invalidFiles.length === 0,
+    invalidFiles
+  };
 }
 
 // ========================================================================
