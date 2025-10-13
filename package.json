@@ -21,6 +21,7 @@
     "migrate": "bash scripts/run-db-migration.sh"
   },
   "dependencies": {
+    "@farcaster/miniapp-sdk": "^0.1.0",
     "@monaco-editor/react": "^4.7.0",
     "@privy-io/react-auth": "^2.21.1",
     "@types/diff": "^5.0.3",
