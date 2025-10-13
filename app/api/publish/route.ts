@@ -58,10 +58,29 @@ function validateManifest(manifest: unknown): { valid: boolean; error?: string }
 // POST: Publish manifest
 export async function POST(req: NextRequest) {
   try {
-    // Parse request body
-    const { projectId, manifest } = await req.json();
+    console.log('\n========================================');
+    console.log('📤 PUBLISH API REQUEST RECEIVED');
+    console.log('========================================');
 
-    console.log('📤 Publish request received:', { projectId, hasManifest: !!manifest });
+    // Parse request body
+    let requestBody;
+    try {
+      requestBody = await req.json();
+      console.log('✅ Request body parsed successfully');
+    } catch (parseError) {
+      console.error('❌ Failed to parse request body:', parseError);
+      return NextResponse.json(
+        { success: false, error: 'Invalid JSON in request body' },
+        { status: 400 }
+      );
+    }
+
+    const { projectId, manifest } = requestBody;
+    console.log('📦 Request data:', {
+      projectId,
+      hasManifest: !!manifest,
+      manifestKeys: manifest ? Object.keys(manifest) : []
+    });
 
     // Validate required fields
     if (!projectId) {

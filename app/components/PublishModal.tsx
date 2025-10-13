@@ -56,9 +56,19 @@ export function PublishModal({ isOpen, onClose, projectUrl, projectId }: Publish
 
     // Handle sign and publish
     const handleSignAndPublish = async () => {
+        console.log('handleSignAndPublish called with:', { projectId, projectUrl, formData });
+
         if (!validateForm()) return;
+
         if (!projectId) {
-            setError('Project ID is missing');
+            console.error('❌ Project ID is missing');
+            setError('Project ID is missing. Please ensure your project is loaded correctly.');
+            return;
+        }
+
+        if (!projectUrl) {
+            console.error('❌ Project URL is missing');
+            setError('Project URL is missing. Please ensure your project is deployed.');
             return;
         }
 
@@ -68,13 +78,29 @@ export function PublishModal({ isOpen, onClose, projectUrl, projectId }: Publish
 
         try {
             // Step 1: Sign with SDK
-            const domain = new URL(formData.homeUrl).hostname;
-            console.log('Signing manifest for domain:', domain);
+            console.log('📝 Step 1: Extracting domain from homeUrl:', formData.homeUrl);
+            let domain;
+            try {
+                domain = new URL(formData.homeUrl).hostname;
+                console.log('✅ Domain extracted:', domain);
+            } catch (urlError) {
+                console.error('❌ Failed to parse home URL:', urlError);
+                throw new Error(`Invalid home URL format: ${formData.homeUrl}`);
+            }
 
-            const accountAssociation = await sdk.experimental.signManifest({ domain });
-            console.log('Manifest signed successfully');
+            console.log('🔐 Step 2: Signing manifest with Farcaster SDK...');
+            let accountAssociation;
+            try {
+                accountAssociation = await sdk.experimental.signManifest({ domain });
+                console.log('✅ Manifest signed successfully');
+                console.log('Account association:', accountAssociation);
+            } catch (sdkError) {
+                console.error('❌ SDK signing failed:', sdkError);
+                throw new Error(`Failed to sign manifest with Farcaster: ${sdkError instanceof Error ? sdkError.message : String(sdkError)}`);
+            }
 
             // Step 2: Build complete manifest
+            console.log('📦 Step 3: Building manifest object...');
             const manifest = {
                 accountAssociation,
                 miniapp: {
@@ -90,13 +116,23 @@ export function PublishModal({ isOpen, onClose, projectUrl, projectId }: Publish
                 }
             };
 
-            console.log('Publishing manifest:', manifest);
+            console.log('✅ Manifest built:', JSON.stringify(manifest, null, 2));
 
             // Step 3: Send to API
+            console.log('🌐 Step 4: Retrieving session token...');
             const sessionToken = sessionStorage.getItem('sessionToken');
             if (!sessionToken) {
+                console.error('❌ No session token found');
                 throw new Error('Not authenticated. Please sign in first.');
             }
+            console.log('✅ Session token retrieved');
+
+            console.log('📤 Step 5: Sending manifest to API...', {
+                endpoint: '/api/publish',
+                projectId,
+                hasManifest: !!manifest,
+                hasSessionToken: !!sessionToken
+            });
 
             const response = await fetch('/api/publish', {
                 method: 'POST',
@@ -110,7 +146,31 @@ export function PublishModal({ isOpen, onClose, projectUrl, projectId }: Publish
                 })
             });
 
+            console.log('API response status:', response.status);
+            console.log('API response headers:', response.headers);
+
+            if (!response.ok) {
+                // Try to get error details from response
+                let errorMessage = `HTTP ${response.status}: ${response.statusText}`;
+                try {
+                    const errorData = await response.json();
+                    errorMessage = errorData.error || errorMessage;
+                    console.error('API error response:', errorData);
+                } catch (parseError) {
+                    // Response might not be JSON
+                    const textError = await response.text();
+                    console.error('API error (non-JSON):', textError);
+                    errorMessage = textError || errorMessage;
+                }
+                throw new Error(errorMessage);
+            }
+
             const result = await response.json();
+            console.log('API response body:', result);
+
+            if (!result || typeof result !== 'object') {
+                throw new Error('Invalid response format from server');
+            }
 
             if (!result.success) {
                 throw new Error(result.error || 'Failed to publish');
