@@ -124,35 +124,6 @@ export function injectContractAddresses(
   return updatedContent;
 }
 
-/**
- * Extract contract name from constant name
- * Examples:
- * - POLLS_CONTRACT_ADDRESS -> PollsContract
- * - ERC20_TOKEN_ADDRESS -> ERC20Token
- * - ESCROW_ADDRESS -> Escrow
- */
-function extractContractNameFromConstant(constantName: string): string {
-  // Remove _ADDRESS suffix
-  let name = constantName.replace(/_ADDRESS$/, '');
-
-  // Remove _CONTRACT suffix if present
-  name = name.replace(/_CONTRACT$/, '');
-
-  // Convert SNAKE_CASE to PascalCase
-  const parts = name.split('_');
-  const pascalCase = parts
-    .map(part => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
-    .join('');
-
-  // Add Contract suffix for common patterns
-  if (!pascalCase.endsWith('Contract') &&
-      !pascalCase.startsWith('ERC') &&
-      !['Token', 'Escrow', 'NFT', 'DAO'].some(suffix => pascalCase.endsWith(suffix))) {
-    return `${pascalCase}Contract`;
-  }
-
-  return pascalCase;
-}
 
 /**
  * Validate Ethereum address format

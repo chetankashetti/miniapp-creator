@@ -88,19 +88,51 @@ export function PublishModal({ isOpen, onClose, projectUrl, projectId }: Publish
                 throw new Error(`Invalid home URL format: ${formData.homeUrl}`);
             }
 
-            console.log('🔐 Step 2: Signing manifest with Farcaster SDK...');
+            console.log('🔐 Step 2: Checking Farcaster SDK context...');
+
+            // Check if SDK is available and has the required methods
+            if (!sdk || !sdk.experimental || typeof sdk.experimental.signManifest !== 'function') {
+                console.error('❌ Farcaster SDK not properly initialized');
+                throw new Error('SDK_NOT_AVAILABLE');
+            }
+
+            // Check SDK context
+            console.log('SDK context:', {
+                hasSdk: !!sdk,
+                hasExperimental: !!sdk.experimental,
+                hasSignManifest: typeof sdk.experimental?.signManifest === 'function'
+            });
+
+            console.log('🔐 Step 3: Signing manifest with Farcaster SDK...');
             let accountAssociation;
             try {
                 accountAssociation = await sdk.experimental.signManifest({ domain });
                 console.log('✅ Manifest signed successfully');
                 console.log('Account association:', accountAssociation);
-            } catch (sdkError) {
+            } catch (sdkError: unknown) {
                 console.error('❌ SDK signing failed:', sdkError);
-                throw new Error(`Failed to sign manifest with Farcaster: ${sdkError instanceof Error ? sdkError.message : String(sdkError)}`);
+
+                // Handle specific error codes from SDK
+                if (typeof sdkError === 'object' && sdkError !== null && 'code' in sdkError) {
+                    const errorWithCode = sdkError as { code: string };
+                    if (errorWithCode.code === 'RejectedByUser') {
+                        throw new Error('REJECTED_BY_USER');
+                    } else if (errorWithCode.code === 'InvalidDomain') {
+                        throw new Error('INVALID_DOMAIN');
+                    }
+                }
+
+                // Handle generic SDK errors
+                const errorMsg = sdkError instanceof Error ? sdkError.message : String(sdkError);
+                if (errorMsg.includes('result') || errorMsg.includes('undefined')) {
+                    throw new Error('SDK_NOT_AVAILABLE');
+                }
+
+                throw new Error(`Failed to sign manifest: ${errorMsg}`);
             }
 
-            // Step 2: Build complete manifest
-            console.log('📦 Step 3: Building manifest object...');
+            // Step 3: Build complete manifest
+            console.log('📦 Step 4: Building manifest object...');
             const manifest = {
                 accountAssociation,
                 miniapp: {
@@ -118,8 +150,8 @@ export function PublishModal({ isOpen, onClose, projectUrl, projectId }: Publish
 
             console.log('✅ Manifest built:', JSON.stringify(manifest, null, 2));
 
-            // Step 3: Send to API
-            console.log('🌐 Step 4: Retrieving session token...');
+            // Step 4: Send to API
+            console.log('🌐 Step 5: Retrieving session token...');
             const sessionToken = sessionStorage.getItem('sessionToken');
             if (!sessionToken) {
                 console.error('❌ No session token found');
@@ -127,7 +159,7 @@ export function PublishModal({ isOpen, onClose, projectUrl, projectId }: Publish
             }
             console.log('✅ Session token retrieved');
 
-            console.log('📤 Step 5: Sending manifest to API...', {
+            console.log('📤 Step 6: Sending manifest to API...', {
                 endpoint: '/api/publish',
                 projectId,
                 hasManifest: !!manifest,
