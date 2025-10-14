@@ -1077,6 +1077,21 @@ ACCESS CONTROL:
 - Public minting: Remove onlyOwner or add public mint function
 - Owner-only: Keep onlyOwner modifier
 - Paid minting: Add payable with require(msg.value >= PRICE)
+
+DEPLOYMENT SCRIPT (contracts/scripts/deploy.js):
+🚨 MULTIPLE CONTRACTS: Add 3-second delay between deployments to prevent nonce conflicts
+Example:
+  await contract1.waitForDeployment();
+  console.log("✅ Contract1:", await contract1.getAddress());
+
+  // Delay before next deployment
+  await new Promise(resolve => setTimeout(resolve, 3000));
+
+  const Contract2 = await ethers.getContractFactory("Contract2");
+  const contract2 = await Contract2.deploy();
+  await contract2.waitForDeployment();
+
+❌ Back-to-back deployments cause "replacement transaction underpriced" error
 `;
 }
 
