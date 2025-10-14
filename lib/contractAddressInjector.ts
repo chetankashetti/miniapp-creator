@@ -10,6 +10,60 @@ export interface ContractAddressMap {
 }
 
 /**
+ * Inject a single contract address using simple replace with fallback
+ *
+ * @param content - File content
+ * @param contractAddress - Deployed contract address
+ * @returns Object with updated content and success status
+ */
+function injectSingleContractAddress(
+  content: string,
+  contractAddress: string
+): { updated: string; success: boolean } {
+
+  const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
+
+  // ============================================================
+  // PRIMARY: Simple Replace
+  // ============================================================
+  if (content.includes(ZERO_ADDRESS)) {
+    const updated = content.replace(ZERO_ADDRESS, contractAddress);
+
+    // Verify it worked
+    if (updated.includes(contractAddress)) {
+      console.log('✅ Contract address injected via simple replace');
+      return { updated, success: true };
+    }
+  }
+
+  // ============================================================
+  // FALLBACK: Line-by-Line Search
+  // ============================================================
+  console.log('⚠️ Simple replace failed, trying fallback...');
+
+  const lines = content.split('\n');
+  let found = false;
+
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i].includes('CONTRACT_ADDRESS') && lines[i].includes(ZERO_ADDRESS)) {
+      lines[i] = lines[i].replace(ZERO_ADDRESS, contractAddress);
+      found = true;
+      console.log(`✅ Contract address injected via fallback (line ${i + 1})`);
+      break; // Only replace first occurrence
+    }
+  }
+
+  if (found) {
+    return { updated: lines.join('\n'), success: true };
+  }
+
+  // Failed
+  console.error('❌ Contract address injection failed');
+  console.error('📄 File content preview:', content.substring(0, 300));
+  return { updated: content, success: false };
+}
+
+/**
  * Inject contract addresses into src/lib/contracts.ts
  *
  * @param contractFileContent - Original content of src/lib/contracts.ts
@@ -22,71 +76,48 @@ export function injectContractAddresses(
 ): string {
   let updatedContent = contractFileContent;
 
-  // Find all contract address constants in the file
-  // Pattern matches: export const SOME_CONTRACT_ADDRESS = '0x0000...' as `0x${string}`;
-  const addressPattern = /export\s+const\s+([A-Z_]+_ADDRESS)\s*=\s*['"`]0x0+['"`]\s*as\s*`0x\$\{string\}`/g;
+  // Get the first contract address (for simple replace approach)
+  const firstContractAddress = Object.values(contractAddresses)[0];
+  const firstContractName = Object.keys(contractAddresses)[0];
 
-  let match;
-  const matches: Array<{ fullMatch: string; constantName: string; position: number }> = [];
-
-  while ((match = addressPattern.exec(contractFileContent)) !== null) {
-    matches.push({
-      fullMatch: match[0],
-      constantName: match[1],
-      position: match.index
-    });
+  if (!firstContractAddress) {
+    console.warn('⚠️ No contract addresses provided');
+    return contractFileContent;
   }
 
-  console.log(`🔍 Found ${matches.length} contract address constants to potentially update`);
+  console.log(`🔍 Attempting to inject contract address: ${firstContractName} -> ${firstContractAddress}`);
 
-  // Process each match and try to find corresponding deployed address
-  for (const matchInfo of matches) {
-    const constantName = matchInfo.constantName;
+  // Validate address format
+  if (!isValidEthereumAddress(firstContractAddress)) {
+    console.error(`❌ Invalid address format: ${firstContractAddress}`);
+    return contractFileContent;
+  }
 
-    // Extract contract name from constant name
-    // Examples:
-    // - POLLS_CONTRACT_ADDRESS -> PollsContract
-    // - ERC20_TOKEN_ADDRESS -> ERC20Token
-    // - ESCROW_ADDRESS -> Escrow
-    const contractName = extractContractNameFromConstant(constantName);
+  // Try simple replace with fallback
+  const result = injectSingleContractAddress(contractFileContent, firstContractAddress);
 
-    console.log(`  📝 Constant: ${constantName} -> Potential contract: ${contractName}`);
+  if (result.success) {
+    updatedContent = result.updated;
+    console.log(`✅ Successfully injected ${firstContractName} address`);
+  } else {
+    console.error(`❌ Failed to inject ${firstContractName} address`);
+  }
 
-    // Try to find deployed address
-    let deployedAddress: string | null = null;
+  // If there are multiple contracts, try to inject them too
+  if (Object.keys(contractAddresses).length > 1) {
+    console.log(`🔍 Found ${Object.keys(contractAddresses).length} total contracts, attempting to inject remaining...`);
 
-    // Try exact match first
-    if (contractAddresses[contractName]) {
-      deployedAddress = contractAddresses[contractName];
-      console.log(`    ✅ Found exact match: ${contractName} -> ${deployedAddress}`);
-    } else {
-      // Try fuzzy matching (case-insensitive, handle variations)
-      const contractNameLower = contractName.toLowerCase();
-      for (const [name, address] of Object.entries(contractAddresses)) {
-        if (name.toLowerCase() === contractNameLower ||
-            name.toLowerCase().replace(/contract$/, '') === contractNameLower ||
-            contractNameLower.replace(/contract$/, '') === name.toLowerCase()) {
-          deployedAddress = address;
-          console.log(`    ✅ Found fuzzy match: ${name} -> ${deployedAddress}`);
-          break;
+    for (const [contractName, address] of Object.entries(contractAddresses)) {
+      if (contractName === firstContractName) continue; // Skip first one, already done
+
+      if (isValidEthereumAddress(address)) {
+        // Try to find and replace any remaining zero addresses
+        const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
+        if (updatedContent.includes(ZERO_ADDRESS)) {
+          updatedContent = updatedContent.replace(ZERO_ADDRESS, address);
+          console.log(`✅ Injected additional contract: ${contractName} -> ${address}`);
         }
       }
-    }
-
-    if (deployedAddress) {
-      // Validate address format
-      if (!isValidEthereumAddress(deployedAddress)) {
-        console.warn(`    ⚠️  Invalid address format: ${deployedAddress}, skipping`);
-        continue;
-      }
-
-      // Replace the placeholder address with the deployed address
-      const newConstantDeclaration = `export const ${constantName} = '${deployedAddress}' as \`0x\${string}\``;
-      updatedContent = updatedContent.replace(matchInfo.fullMatch, newConstantDeclaration);
-
-      console.log(`    ✅ Injected: ${constantName} = ${deployedAddress}`);
-    } else {
-      console.log(`    ⚠️  No deployed address found for ${contractName}`);
     }
   }
 
@@ -162,7 +193,7 @@ export function updateFilesWithContractAddresses(
           content: updatedContent
         };
       } else {
-        console.log(`ℹ️  No changes needed for ${file.filename}`);
+        console.warn(`⚠️ No changes made to ${file.filename} - check if zero address is present`);
       }
     }
 
