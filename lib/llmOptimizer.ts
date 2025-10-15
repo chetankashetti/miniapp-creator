@@ -1100,6 +1100,10 @@ ACCESS CONTROL:
 - Owner-only: Keep onlyOwner modifier
 - Paid minting: Add payable with require(msg.value >= PRICE)
 
+ERC721 APPS:
+🚨 ABI MUST include ALL ERC721Enumerable functions (balanceOf, tokenOfOwnerByIndex, tokenURI, totalSupply, etc.)
+🚨 "My NFTs" tab MUST display owned NFTs using available ABI functions, not placeholder text
+
 DEPLOYMENT SCRIPT (contracts/scripts/deploy.js):
 🚨 MULTIPLE CONTRACTS: Add 3-second delay between deployments to prevent nonce conflicts
 Example:
