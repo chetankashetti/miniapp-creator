@@ -185,7 +185,7 @@ const FARCASTER_BOILERPLATE_CONTEXT = {
       "Only farcasterMiniApp() from @farcaster/miniapp-wagmi-connector",
     userManagement: "Always use useUser hook from @/hooks for user data",
     noPackageChanges: "Do not modify package.json unless absolutely necessary",
-    wagmiConfig: "Do not modify wagmi.ts - it has everything needed",
+    wagmiConfig: "For Web3 apps: Modify wagmi.ts to import CHAIN from contractConfig. For non-Web3 apps: Do not modify wagmi.ts",
   },
   keyComponents: {
     useUser: {
@@ -344,7 +344,7 @@ AVAILABLE FEATURES:
 - Mobile-first UI components (Button, Input, ConnectWallet, Tabs)
 - Automatic environment detection (Mini App vs Browser)
 - Pre-configured API endpoint for Farcaster authentication (/api/me)
-- Do not change wagmi.ts file - it has everything you need
+- For Web3 apps: Modify wagmi.ts to import CHAIN from contractConfig. For non-Web3 apps: Do not modify wagmi.ts
 - Do not modify package.json unless absolutely necessary
 
 CRITICAL: You MUST return ONLY valid JSON. No explanations, no text, no markdown, no code fences.
@@ -418,7 +418,7 @@ RULES:
 - Analyze user intent carefully
 - Identify required files to modify (empty array if no changes needed)
 - List all npm dependencies needed (empty array if no changes needed)
-- For IPFS/storage: use "web3.storage" (not @web3-storage/web3-storage)
+- For IPFS/storage: use “@web3-storage/w3up-client” (current web3.storage client); do not add it unless code actually uses it. Never use “@web3-storage/web3-storage” (does not exist).
 - Specify contract interactions if any
 - Provide clear reason for decision
 - Return valid JSON only
@@ -636,7 +636,7 @@ CRITICAL REQUIREMENTS - INITIAL GENERATION:
 - location: string (where in the file this change should happen)
 - dependencies: array of what this change depends on (hooks, components, etc.)
 - contractInteraction: object with type and functions if blockchain interaction needed
-- do not change wagmi.ts file it has everything you need
+- For Web3 apps: Modify wagmi.ts to import CHAIN from contractConfig. For non-Web3 apps: Do not modify wagmi.ts
 - do not edit package.json or add any extra dependencies to package.json if not needed must be minimal
 
 PLANNING RULES:
@@ -840,7 +840,7 @@ CRITICAL REQUIREMENTS - FOLLOW-UP CHANGES:
 - contractInteraction: object with type and functions if blockchain interaction needed
 - diffHunks: array of diff hunk objects with oldStart, oldLines, newStart, newLines, lines
 - unifiedDiff: string containing the complete unified diff format for the file
-- do not change wagmi.ts file it has everything you need
+- For Web3 apps: Modify wagmi.ts to include contractConfig imports. For non-Web3 apps: Do not modify wagmi.ts
 - do not edit package.json or add any extra dependencies to package.json if not needed must be minimal
 
 PLANNING RULES:
@@ -886,7 +886,7 @@ CODE GENERATION CORE RULES:
 - Follow patch plan fields exactly (purpose, description, location, dependencies)
 - Include all required imports and implement contract interactions when specified
 - Prefer neutral colors with subtle accents, ensure good contrast and accessibility
-- Do not change wagmi.ts file - it has everything you need
+- For Web3 apps: Modify wagmi.ts to import CHAIN from contractConfig. For non-Web3 apps: Do not modify wagmi.ts
 - Do not edit package.json unless absolutely necessary
 `;
 }
@@ -1049,6 +1049,27 @@ Use ONLY existing templates from contracts/src/:
 NEVER write new .sol files. Reference template functions in frontend code.
 Templates have all needed functions: mint, transfer, balanceOf, etc.
 
+CHAIN CONFIGURATION:
+🚨 contractConfig.ts MUST export CHAIN:
+   import { baseSepolia } from 'wagmi/chains';
+   export const CHAIN = baseSepolia;
+   export const CHAIN_ID = CHAIN.id;
+   export const CONTRACT_ADDRESS = '0x...' as \`0x\${string}\`;
+   export const CONTRACT_ABI = [...] as const;
+
+🚨 wagmi.ts MUST import CHAIN:
+   import { CHAIN } from "./contractConfig";
+   export const config = createConfig({
+     chains: [CHAIN],
+     transports: { [CHAIN.id]: http() },
+     connectors: [farcasterMiniApp()],
+     ssr: true,
+   });
+
+🚨 ALL contract calls MUST use chainId:
+   writeContract({ address: CONTRACT_ADDRESS, abi: CONTRACT_ABI, functionName: 'fn', args: [...], chainId: CHAIN_ID });
+   useReadContract({ address: CONTRACT_ADDRESS, abi: CONTRACT_ABI, functionName: 'fn', chainId: CHAIN_ID, query: { enabled: true } });
+
 CONTRACT ADDRESS SETUP:
 ✅ Use placeholder initially: const CONTRACT_ADDRESS = '0x0000000000000000000000000000000000000000' as \`0x\${string}\`;
 ✅ Add deployment comment: // TODO: Deploy contract and replace address
@@ -1057,6 +1078,7 @@ CONTRACT ADDRESS SETUP:
      address: CONTRACT_ADDRESS,
      abi: ABI,
      functionName: 'fn',
+     chainId: CHAIN_ID,
      query: { enabled: CONTRACT_ADDRESS !== '0x0000000000000000000000000000000000000000' }
    });
 
