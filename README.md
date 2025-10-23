@@ -185,5 +185,4 @@ kill -9 <PID>
 ```
 
 ## License
-
-MIT
+Licensed under the MIT License © 2025 Chetan Kashetty
